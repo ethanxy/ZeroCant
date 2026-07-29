@@ -1,0 +1,25 @@
+# ESP-IDF build artifacts
+build/
+sdkconfig.old
+sdkconfig.temp
+*.map
+
+# IDE / editor
+.vscode/
+.devcontainer/
+.clangd
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Backup / temp files
+*.backup*
+*.patch
+sdkconfig.defaults.backup*
+
+# Logs
+*.log
