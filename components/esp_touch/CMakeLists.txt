@@ -3,6 +3,7 @@ idf_component_register(
 
   PRIV_REQUIRES
   i2c_bsp
+  freertos
 
   INCLUDE_DIRS "./")
 

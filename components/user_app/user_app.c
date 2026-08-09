@@ -74,8 +74,8 @@ static int settings_drag_offset = 0;          // 当前 sheet 偏移（0=展开�
 #define SWIPE_MIN_TIME_MS 100    // 最小滑动时间（毫秒）避免误触
 #define SWIPE_MAX_Y_DEVIATION 160 // X轴最大偏移（像素）允许更倾斜的滑动，从80px增加到160px
 #define SWIPE_BOTTOM_ZONE_PX 48  // 关闭手势起点：底部区域高度
-#define SWIPE_FOLLOW_START_PX 8  // 开始跟手预览的最小位移
-#define SWIPE_OPEN_COMMIT_PX 60  // 下滑松手后确认打开
+#define SWIPE_FOLLOW_START_PX 10 // 开始跟手预览的最小位移
+#define SWIPE_OPEN_COMMIT_PX 100 // 下滑松手后确认打开
 #define SWIPE_CLOSE_COMMIT_PX 40 // 上滑松手后确认关闭
 
 // Settings模式的电压读取控制
@@ -220,6 +220,8 @@ static void settings_sheet_apply_offset(int offset_y) {
 
 static bool settings_sheet_ensure_preview(void) {
     if (settings_ui_is_initialized()) {
+        // 已有界面（含上次残留）也必须进入预览态，松手才能走提交/取消
+        settings_open_preview = true;
         return true;
     }
     if (!example_lvgl_lock(100)) {
@@ -319,9 +321,9 @@ static swipe_direction_t detect_swipe(uint16_t start_x, uint16_t start_y, uint16
     }
 }
 
-// 根据滑动方向切换组件
-static void handle_swipe_switch(swipe_direction_t direction) {
-    if (direction == SWIPE_NONE) return;
+// 根据滑动方向切换组件；返回是否成功发起状态切换（或无需切换）
+static bool handle_swipe_switch(swipe_direction_t direction) {
+    if (direction == SWIPE_NONE) return false;
     
     display_mode_t new_mode = current_display_mode;
     ui_state_t target_state;
@@ -331,14 +333,14 @@ static void handle_swipe_switch(swipe_direction_t direction) {
             // 向左滑 - 下一个主模组 (仅限 Angle, Level, Laser)
             if (current_display_mode == DISPLAY_MODE_SETTINGS) {
                 printf("🚫 SWIPE LEFT: Settings mode doesn't support horizontal switching\n");
-                return;
+                return false;
             }
             
             switch (current_display_mode) {
                 case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_LEVEL; break;
                 case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_LASER; break;
                 case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_ANGLE; break;
-                default: return;
+                default: return false;
             }
             printf("🔄 SWIPE LEFT: %d -> %d (next main module)\n", current_display_mode, new_mode);
             break;
@@ -347,14 +349,14 @@ static void handle_swipe_switch(swipe_direction_t direction) {
             // 向右滑 - 上一个主模组 (仅限 Angle, Level, Laser)
             if (current_display_mode == DISPLAY_MODE_SETTINGS) {
                 printf("🚫 SWIPE RIGHT: Settings mode doesn't support horizontal switching\n");
-                return;
+                return false;
             }
             
             switch (current_display_mode) {
                 case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_LASER; break;
                 case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_ANGLE; break;
                 case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_LEVEL; break;
-                default: return;
+                default: return false;
             }
             printf("🔄 SWIPE RIGHT: %d -> %d (previous main module)\n", current_display_mode, new_mode);
             break;
@@ -363,7 +365,7 @@ static void handle_swipe_switch(swipe_direction_t direction) {
             // 向下滑 - 进入Settings模组
             if (current_display_mode == DISPLAY_MODE_SETTINGS) {
                 printf("🚫 SWIPE DOWN: Already in Settings mode\n");
-                return;
+                return false;
             }
             
             // 记录当前主模组状态
@@ -376,7 +378,7 @@ static void handle_swipe_switch(swipe_direction_t direction) {
             // 向上滑 - 退出Settings模组，回到上一次的主模组
             if (current_display_mode != DISPLAY_MODE_SETTINGS) {
                 printf("🚫 SWIPE UP: Not in Settings mode\n");
-                return;
+                return false;
             }
             
             new_mode = previous_main_mode;
@@ -384,7 +386,7 @@ static void handle_swipe_switch(swipe_direction_t direction) {
             break;
             
         default:
-            return;
+            return false;
     }
     
     if (new_mode != current_display_mode) {
@@ -394,16 +396,18 @@ static void handle_swipe_switch(swipe_direction_t direction) {
             case DISPLAY_MODE_LEVEL:    target_state = UI_STATE_LEVEL; break;
             case DISPLAY_MODE_LASER:    target_state = UI_STATE_LASER; break;
             case DISPLAY_MODE_SETTINGS: target_state = UI_STATE_SETTINGS; break;
-            default: return;
+            default: return false;
         }
         
         esp_err_t ret = ui_state_request_transition(target_state, 5000); // 5秒超时
         if (ret == ESP_OK) {
             printf("✅ SWIPE: UI transition requested to state %d\n", target_state);
-        } else {
-            printf("❌ SWIPE: UI transition failed: %s\n", esp_err_to_name(ret));
+            return true;
         }
+        printf("❌ SWIPE: UI transition failed: %s\n", esp_err_to_name(ret));
+        return false;
     }
+    return true;
 }
 
 // 检查触摸是否在右上角深度休眠区域内
@@ -715,7 +719,8 @@ static void touch_monitor_task(void *arg) {
                     if (dx <= 20 && dy <= 20) { // 允许20像素范围内的移动
                         uint32_t elapsed = current_time - long_press_start_time;
                         if (elapsed >= LONG_PRESS_DURATION_MS) {
-                            printf("🌙 LONG PRESS: 3 seconds completed! Entering deep sleep...\n");
+                            printf("🌙 LONG PRESS: %dms completed! Entering deep sleep...\n",
+                                   LONG_PRESS_DURATION_MS);
                             deep_sleep_handler();
                             // 不会执行到这里，因为设备已经进入深度休眠
                         } else {
@@ -802,8 +807,13 @@ static void touch_monitor_task(void *arg) {
                         printf("🚀 SWIPE: Open preview committed (dy=%d, offset=%d)\n",
                                release_dy, settings_drag_offset);
                         settings_sheet_apply_offset(0);
-                        settings_open_preview = false;
-                        handle_swipe_switch(SWIPE_DOWN);
+                        if (handle_swipe_switch(SWIPE_DOWN)) {
+                            settings_open_preview = false;
+                        } else {
+                            // 状态切换失败：回收预览，避免菜单卡在主界面之上
+                            printf("❌ SWIPE: Open commit failed, cancelling preview\n");
+                            settings_sheet_cancel_preview();
+                        }
                     } else {
                         printf("🚀 SWIPE: Open preview cancelled (dy=%d, offset=%d)\n",
                                release_dy, settings_drag_offset);
@@ -829,8 +839,14 @@ static void touch_monitor_task(void *arg) {
                         if (direction == SWIPE_UP) {
                             // 保持当前偏移，避免先弹回展开再关闭
                             settings_close_pending = true;
+                            if (!handle_swipe_switch(direction)) {
+                                // 切换失败：恢复可关闭状态并弹回展开
+                                settings_close_pending = false;
+                                settings_sheet_apply_offset(0);
+                            }
+                        } else {
+                            handle_swipe_switch(direction);
                         }
-                        handle_swipe_switch(direction);
                     } else if (ui_state_get_current() == UI_STATE_SETTINGS && !settings_close_pending) {
                         // 未触发关闭：弹回完全展开
                         settings_sheet_apply_offset(0);
