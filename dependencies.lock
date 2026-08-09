@@ -30,7 +30,7 @@ dependencies:
   lvgl:
     dependencies: []
     source:
-      path: /Users/xuanyuliu/164/components/lvgl
+      path: /workspace/components/lvgl
       type: local
     version: 8.3.11
 direct_dependencies:
