@@ -69,6 +69,11 @@ void settings_ui_update_swipe_offset(int offset_y);
 bool settings_ui_is_initialized(void);
 
 /**
+ * @brief 弹药设置子页是否正在显示（用于屏蔽底部上滑关闭手势）
+ */
+bool settings_ammo_page_is_open(void);
+
+/**
  * @brief 清理设置UI
  */
 void settings_ui_cleanup(void);

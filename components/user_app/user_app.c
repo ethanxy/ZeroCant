@@ -686,7 +686,9 @@ static void touch_monitor_task(void *arg) {
             transform_touch_coordinates(raw_x, raw_y, &screen_x, &screen_y);
             
             // 检查是否在设置界面的底部区域（关闭手势起点）
-            if (ui_state_get_current() == UI_STATE_SETTINGS && !settings_close_pending) {
+            // 弹药子页打开时禁用，避免抢占 Back/Save 等底部按钮
+            if (ui_state_get_current() == UI_STATE_SETTINGS && !settings_close_pending &&
+                !settings_ammo_page_is_open()) {
                 if (screen_y >= EXAMPLE_LCD_V_RES - SWIPE_BOTTOM_ZONE_PX) {
                     if (!bottom_touch_hint_active) {
                         bottom_touch_hint_active = true;
@@ -772,9 +774,10 @@ static void touch_monitor_task(void *arg) {
                     int abs_dy = delta_y >= 0 ? delta_y : -delta_y;
                     ui_state_t ui_now = ui_state_get_current();
 
-                    // 关闭：Settings 内从底部起滑，向上跟手
+                    // 关闭：Settings 内从底部起滑，向上跟手（弹药页打开时禁用）
                     if (ui_now == UI_STATE_SETTINGS && bottom_touch_hint_active &&
-                        !settings_close_pending && delta_y < 0) {
+                        !settings_close_pending && !settings_ammo_page_is_open() &&
+                        delta_y < 0) {
                         settings_sheet_apply_offset(delta_y);
                     }
 
@@ -821,7 +824,9 @@ static void touch_monitor_task(void *arg) {
                     }
                 } else {
                     // 检查是否允许上滑：只有在设置界面且从底部区域开始触摸才允许
-                    bool allow_up_swipe = (ui_state_get_current() == UI_STATE_SETTINGS) && bottom_touch_hint_active;
+                    bool allow_up_swipe = (ui_state_get_current() == UI_STATE_SETTINGS) &&
+                                         bottom_touch_hint_active &&
+                                         !settings_ammo_page_is_open();
                     printf("🔍 SWIPE DEBUG: UI_STATE=%d, bottom_hint_active=%d, allow_up_swipe=%d\n", 
                            ui_state_get_current(), bottom_touch_hint_active, allow_up_swipe);
                     

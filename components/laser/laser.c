@@ -6,8 +6,12 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "ballistic_calc.h"
+#include "ballistic_profile.h"
+#include "angle_calc.h"
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 static const char* TAG = "laser";
 
@@ -88,8 +92,10 @@ void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     }
     lv_label_set_text(status_label, "Ready to measure");
     lv_obj_set_style_text_color(status_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_20, 0);  // 加大字体提高可读性
-    lv_obj_align(status_label, LV_ALIGN_CENTER, 0, -40);
+    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_16, 0);  // 多行 Drop/Hold 可读
+    lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(status_label, screen_width - 24);
+    lv_obj_align(status_label, LV_ALIGN_CENTER, 0, -50);
     lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
     
     // 创建测量按钮（屏幕下方）
@@ -192,6 +198,9 @@ esp_err_t laser_hardware_init(void) {
     
     hardware_initialized = true;
     ESP_LOGI(TAG, "Laser hardware initialized successfully (power off)");
+
+    ballistic_profile_init();
+    ballistic_run_sanity_check();
     
     return ESP_OK;
 }
@@ -410,16 +419,46 @@ void laser_start_measurement(void) {
             measure_end_time, measure_end_time - measure_start_time);
     
     if (ret == ESP_OK) {
-        // 测量成功，显示距离
+        // 测量成功，显示距离 + 弹道修正（固定弹药 profile）
         float distance_m = distance_mm / 1000.0f;  // 转换为米
-        
-        char distance_text[64];
-        snprintf(distance_text, sizeof(distance_text), 
-                "Distance: %.2f m\n(%.0f mm)", distance_m, distance_mm);
+
+        float pitch = 0.0f, roll = 0.0f, yaw = 0.0f;
+        angle_calc_get(&pitch, &roll, &yaw);
+        /* Device pitch: upright≈0, tip-back (aim up) is negative → look angle = -pitch */
+        float look_angle_deg = -pitch;
+
+        ballistic_input_t bal_in = {
+            .distance_m = distance_m,
+            .look_angle_deg = look_angle_deg,
+        };
+        ballistic_output_t bal_out = {0};
+        esp_err_t bal_ret = ballistic_solve_holdover(&bal_in, &bal_out);
+
+        char distance_text[160];
+        if (bal_ret == ESP_OK && bal_out.valid) {
+            snprintf(distance_text, sizeof(distance_text),
+                     "Distance: %.2f m\n"
+                     "Drop: %.1f in (%.0f mm)\n"
+                     "Hold: %.2f mil\n"
+                     "%s",
+                     distance_m,
+                     bal_out.drop_in,
+                     bal_out.drop_m * 1000.0f,
+                     bal_out.hold_mil,
+                     ballistic_profile_name());
+        } else {
+            snprintf(distance_text, sizeof(distance_text),
+                     "Distance: %.2f m\n"
+                     "Hold: --\n"
+                     "%s",
+                     distance_m,
+                     ballistic_profile_name());
+        }
         laser_ui_set_status_text(distance_text);
         measurement_result_displayed = true;
-        
-        ESP_LOGI(TAG, "Measurement successful: %.2f mm", distance_mm);
+
+        ESP_LOGI(TAG, "Measurement successful: %.2f mm look=%.1f° bal=%s",
+                 distance_mm, look_angle_deg, esp_err_to_name(bal_ret));
     } else {
         // 测量失败，根据错误类型显示不同的提示信息
         const char* error_message;

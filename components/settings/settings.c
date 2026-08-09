@@ -1,5 +1,7 @@
 #include "settings.h"
+#include "settings_ammo.h"
 #include "angle_calc.h"
+#include "ballistic_profile.h"
 #include "lvgl.h"
 #include "esp_app_desc.h"
 #include <stdio.h>
@@ -50,6 +52,8 @@ static lv_obj_t *brightness_slider = NULL;
 static lv_obj_t *title_label = NULL;
 static lv_obj_t *calibration_button = NULL;
 static lv_obj_t *calibration_label = NULL;
+static lv_obj_t *ammo_button = NULL;
+static lv_obj_t *ammo_button_label = NULL;
 static lv_obj_t *swipe_hint_rect = NULL;  // 向上滑动提示矩形
 static lv_obj_t *version_label = NULL;    // 固件版本号
 static int screen_width = 240;
@@ -159,9 +163,17 @@ static void calibration_button_event(lv_event_t *e) {
     }
 }
 
+static void ammo_button_event(lv_event_t *e) {
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        settings_ammo_page_show();
+    }
+}
+
 void settings_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     screen_width = scr_width;
     screen_height = scr_height;
+
+    ballistic_profile_init();
     
     printf("settings_ui_init: initializing %dx%d settings UI\n", screen_width, screen_height);
     
@@ -305,6 +317,33 @@ void settings_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     
     // 添加按钮事件处理
     lv_obj_add_event_cb(calibration_button, calibration_button_event, LV_EVENT_CLICKED, NULL);
+
+    // 弹药信息设置入口（Set Level 下方）
+    ammo_button = lv_btn_create(settings_screen);
+    if (!ammo_button) {
+        printf("settings_ui_init: Failed to create ammo_button\n");
+        return;
+    }
+    lv_obj_set_size(ammo_button, 180, 40);
+    lv_obj_align(ammo_button, LV_ALIGN_LEFT_MID, 20, 130);
+    lv_obj_set_style_bg_color(ammo_button, lv_color_hex(0x404040), 0);
+    lv_obj_set_style_bg_opa(ammo_button, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(ammo_button, lv_color_white(), 0);
+    lv_obj_set_style_border_width(ammo_button, 1, 0);
+    lv_obj_set_style_radius(ammo_button, 5, 0);
+
+    ammo_button_label = lv_label_create(ammo_button);
+    if (!ammo_button_label) {
+        printf("settings_ui_init: Failed to create ammo_button_label\n");
+        return;
+    }
+    lv_label_set_text(ammo_button_label, "Ammo Setup");
+    lv_obj_set_style_text_color(ammo_button_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(ammo_button_label, &lv_font_montserrat_16, 0);
+    lv_obj_center(ammo_button_label);
+    lv_obj_add_event_cb(ammo_button, ammo_button_event, LV_EVENT_CLICKED, NULL);
+
+    settings_ammo_page_create(settings_screen, screen_width, screen_height);
     
     // 固件版本号（底部，提示条上方）
     version_label = lv_label_create(settings_screen);
@@ -450,6 +489,10 @@ void settings_ui_cleanup(void) {
         lv_obj_del(calibration_button);
         calibration_button = NULL;
     }
+
+    settings_ammo_page_destroy();
+    ammo_button_label = NULL;
+    ammo_button = NULL;
     
     if (swipe_hint_rect && lv_obj_is_valid(swipe_hint_rect)) {
         lv_obj_del(swipe_hint_rect);
