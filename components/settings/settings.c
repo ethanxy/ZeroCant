@@ -1,8 +1,12 @@
 #include "settings.h"
 #include "angle_calc.h"
 #include "lvgl.h"
+#include "esp_app_desc.h"
 #include <stdio.h>
 #include <string.h>
+
+// Fallback when app descriptor has no meaningful version
+#define FIRMWARE_VERSION_FALLBACK "2026080916"
 
 // 电池电压到百分比转换参数（基于LiPo实际放电曲线）
 #define BATTERY_VOLTAGE_MIN 3.40f   // 放电截止点 (0%)
@@ -50,8 +54,19 @@ static lv_obj_t *title_label = NULL;
 static lv_obj_t *calibration_button = NULL;
 static lv_obj_t *calibration_label = NULL;
 static lv_obj_t *swipe_hint_rect = NULL;  // 向上滑动提示矩形
+static lv_obj_t *version_label = NULL;    // 固件版本号
 static int screen_width = 240;
 static int screen_height = 240;
+
+static const char *resolve_firmware_version(void) {
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    if (app_desc && app_desc->version[0] != '\0' &&
+        strcmp(app_desc->version, "1") != 0 &&
+        strcmp(app_desc->version, "0.0.0") != 0) {
+        return app_desc->version;
+    }
+    return FIRMWARE_VERSION_FALLBACK;
+}
 
 // 外部函数声明
 extern void setBrightnes(uint8_t brig);  // 注意：原函数名有拼写错误
@@ -274,6 +289,24 @@ void settings_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     // 添加按钮事件处理
     lv_obj_add_event_cb(calibration_button, calibration_button_event, LV_EVENT_CLICKED, NULL);
     
+    // 固件版本号（底部，提示条上方）
+    version_label = lv_label_create(settings_screen);
+    if (!version_label) {
+        printf("settings_ui_init: Failed to create version_label\n");
+        return;
+    }
+
+    {
+        char version_str[48];
+        snprintf(version_str, sizeof(version_str), "FW %s", resolve_firmware_version());
+        lv_label_set_text(version_label, version_str);
+    }
+    lv_obj_set_style_text_color(version_label, lv_color_hex(0x808080), 0);
+    lv_obj_set_style_text_font(version_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_align(version_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(version_label, LV_ALIGN_BOTTOM_MID, 0, -28);
+    lv_obj_clear_flag(version_label, LV_OBJ_FLAG_CLICKABLE);
+
     // 创建向上滑动提示矩形（屏幕最下方）
     swipe_hint_rect = lv_obj_create(settings_screen);
     if (!swipe_hint_rect) {
@@ -294,7 +327,7 @@ void settings_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     lv_obj_add_flag(swipe_hint_rect, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_clear_flag(swipe_hint_rect, LV_OBJ_FLAG_CLICKABLE);
     
-    printf("settings_ui_init: completed successfully\n");
+    printf("settings_ui_init: completed successfully (FW %s)\n", resolve_firmware_version());
 }
 
 void settings_ui_update_voltage(float voltage) {
@@ -405,6 +438,11 @@ void settings_ui_cleanup(void) {
         lv_obj_del(swipe_hint_rect);
         swipe_hint_rect = NULL;
     }
+
+    if (version_label && lv_obj_is_valid(version_label)) {
+        lv_obj_del(version_label);
+        version_label = NULL;
+    }
     
     if (title_label && lv_obj_is_valid(title_label)) {
         lv_obj_del(title_label);
@@ -455,17 +493,18 @@ void settings_ui_update_swipe_offset(int offset_y) {
     if (!settings_screen) {
         return;
     }
-    
-    // 限制偏移范围：只允许向上移动，最大不超过屏幕高度
+
+    // 0 = 完全展开；负值 = 向上移出（打开跟手从 -height 滑到 0）
     if (offset_y > 0) {
-        offset_y = 0;  // 不允许向下偏移
+        offset_y = 0;
     }
-    if (offset_y < -456) {  // 屏幕高度的负值
-        offset_y = -456;  // 限制最大上移距离
+    if (offset_y < -screen_height) {
+        offset_y = -screen_height;
     }
-    
-    // 应用Y轴偏移到整个settings界面
+
     lv_obj_set_y(settings_screen, offset_y);
-    
-    printf("🎨 SWIPE VISUAL: Settings screen offset Y = %d\n", offset_y);
+}
+
+bool settings_ui_is_initialized(void) {
+    return settings_screen != NULL;
 }

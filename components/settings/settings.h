@@ -59,9 +59,14 @@ void settings_ui_update_swipe_hint(bool highlighted);
 
 /**
  * @brief 更新设置界面的滑动偏移（视觉跟随效果）
- * @param offset_y Y轴偏移量（向上为负值）
+ * @param offset_y Y轴偏移量（0=完全展开，负值=向上移出屏幕）
  */
 void settings_ui_update_swipe_offset(int offset_y);
+
+/**
+ * @brief 设置界面是否已创建
+ */
+bool settings_ui_is_initialized(void);
 
 /**
  * @brief 清理设置UI

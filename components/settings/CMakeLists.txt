@@ -1,3 +1,3 @@
 idf_component_register(SRCS "settings.c"
                     INCLUDE_DIRS "."
-                    REQUIRES "lvgl" "angle_calc")
+                    REQUIRES "lvgl" "angle_calc" "esp_app_format")

@@ -65,10 +65,18 @@ static uint32_t swipe_start_time = 0;
 
 // 设置界面底部提示矩形状态管理
 static bool bottom_touch_hint_active = false;  // 跟踪是否已在底部区域触摸过
+static bool settings_open_preview = false;    // 下滑打开时的跟手预览
+static bool settings_close_pending = false;   // 上滑关闭中：勿把偏移弹回 0
+static int settings_drag_offset = 0;          // 当前 sheet 偏移（0=展开，负=上移）
+
 #define SWIPE_MIN_DISTANCE 60    // 最小滑动距离（像素）从80减少到60
 #define SWIPE_MAX_TIME_MS 800    // 最大滑动时间（毫秒）
 #define SWIPE_MIN_TIME_MS 100    // 最小滑动时间（毫秒）避免误触
 #define SWIPE_MAX_Y_DEVIATION 160 // X轴最大偏移（像素）允许更倾斜的滑动，从80px增加到160px
+#define SWIPE_BOTTOM_ZONE_PX 48  // 关闭手势起点：底部区域高度
+#define SWIPE_FOLLOW_START_PX 8  // 开始跟手预览的最小位移
+#define SWIPE_OPEN_COMMIT_PX 60  // 下滑松手后确认打开
+#define SWIPE_CLOSE_COMMIT_PX 40 // 上滑松手后确认关闭
 
 // Settings模式的电压读取控制
 static uint32_t last_voltage_update = 0;
@@ -195,6 +203,48 @@ typedef enum {
     SWIPE_DOWN,   // 向下滑 - 进入settings模组
     SWIPE_UP      // 向上滑 - 退出settings模组
 } swipe_direction_t;
+
+static void settings_sheet_apply_offset(int offset_y) {
+    if (offset_y > 0) {
+        offset_y = 0;
+    }
+    if (offset_y < -EXAMPLE_LCD_V_RES) {
+        offset_y = -EXAMPLE_LCD_V_RES;
+    }
+    settings_drag_offset = offset_y;
+    if (example_lvgl_lock(30)) {
+        settings_ui_update_swipe_offset(offset_y);
+        example_lvgl_unlock();
+    }
+}
+
+static bool settings_sheet_ensure_preview(void) {
+    if (settings_ui_is_initialized()) {
+        return true;
+    }
+    if (!example_lvgl_lock(100)) {
+        printf("❌ SETTINGS PREVIEW: Failed to lock LVGL\n");
+        return false;
+    }
+    settings_ui_init(lv_scr_act(), EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES);
+    settings_ui_update_swipe_offset(-EXAMPLE_LCD_V_RES);
+    example_lvgl_unlock();
+    settings_drag_offset = -EXAMPLE_LCD_V_RES;
+    settings_open_preview = settings_ui_is_initialized();
+    return settings_open_preview;
+}
+
+static void settings_sheet_cancel_preview(void) {
+    if (!settings_open_preview && !settings_ui_is_initialized()) {
+        return;
+    }
+    if (example_lvgl_lock(100)) {
+        settings_ui_cleanup();
+        example_lvgl_unlock();
+    }
+    settings_open_preview = false;
+    settings_drag_offset = 0;
+}
 
 // 检测滑动方向
 static swipe_direction_t detect_swipe(uint16_t start_x, uint16_t start_y, uint16_t end_x, uint16_t end_y, uint32_t duration_ms, bool allow_up_swipe) {
@@ -430,10 +480,20 @@ static void on_ui_state_changed(ui_state_t old_state, ui_state_t new_state) {
             break;
         case UI_STATE_SETTINGS:
             current_display_mode = DISPLAY_MODE_SETTINGS;
+            settings_open_preview = false;
+            settings_close_pending = false;
+            // 打开跟手结束后吸附到完全展开
+            settings_sheet_apply_offset(0);
             break;
         default:
             ESP_LOGW("user_app", "Unknown UI state: %d", new_state);
             break;
+    }
+
+    if (old_state == UI_STATE_SETTINGS && new_state != UI_STATE_SETTINGS) {
+        settings_close_pending = false;
+        settings_open_preview = false;
+        settings_drag_offset = 0;
     }
     
     // 管理previous_main_mode：如果是从主模组切换到Settings，更新previous_main_mode
@@ -621,22 +681,21 @@ static void touch_monitor_task(void *arg) {
             // 转换触摸坐标到屏幕坐标系
             transform_touch_coordinates(raw_x, raw_y, &screen_x, &screen_y);
             
-            // 检查是否在设置界面的底部区域（提示矩形区域）
-            if (ui_state_get_current() == UI_STATE_SETTINGS) {
-                // 底部20像素高度的区域（全宽度）
-                if (screen_y >= EXAMPLE_LCD_V_RES - 20) {
-                    // 触摸在底部区域，激活并高亮提示矩形
+            // 检查是否在设置界面的底部区域（关闭手势起点）
+            if (ui_state_get_current() == UI_STATE_SETTINGS && !settings_close_pending) {
+                if (screen_y >= EXAMPLE_LCD_V_RES - SWIPE_BOTTOM_ZONE_PX) {
                     if (!bottom_touch_hint_active) {
                         bottom_touch_hint_active = true;
-                        settings_ui_update_swipe_hint(true);
+                        if (example_lvgl_lock(30)) {
+                            settings_ui_update_swipe_hint(true);
+                            example_lvgl_unlock();
+                        }
                     }
                 }
-                // 如果已经激活，无论触摸移动到哪里都保持高亮状态
-                // 只有在触摸释放时才会恢复正常状态
             }
             
             // 检查是否在右上角深度休眠区域
-            if (is_touch_in_sleep_area(screen_x, screen_y)) {
+            if (is_touch_in_sleep_area(screen_x, screen_y) && !settings_open_preview) {
                 // 深度休眠区域的长按检测逻辑保持不变
                 if (!long_press_active) {
                     // 开始长按检测
@@ -676,9 +735,8 @@ static void touch_monitor_task(void *arg) {
                 // 在深度休眠区域时取消滑动检测
                 if (swipe_active) {
                     printf("🚀 SWIPE: Cancelled - in sleep area\n");
-                    // 重置设置界面的视觉偏移
-                    if (ui_state_get_current() == UI_STATE_SETTINGS) {
-                        settings_ui_update_swipe_offset(0);
+                    if (ui_state_get_current() == UI_STATE_SETTINGS && !settings_close_pending) {
+                        settings_sheet_apply_offset(0);
                     }
                     swipe_active = false;
                 }
@@ -702,15 +760,25 @@ static void touch_monitor_task(void *arg) {
                     // 继续跟踪滑动，更新最后位置
                     swipe_last_x = screen_x;
                     swipe_last_y = screen_y;
-                    
-                    // 在设置界面且从底部开始的滑动，添加视觉跟随效果
-                    if (ui_state_get_current() == UI_STATE_SETTINGS && bottom_touch_hint_active) {
-                        int delta_y = screen_y - swipe_start_y;  // 计算Y轴移动距离
-                        
-                        // 只有向上滑动才显示视觉效果
-                        if (delta_y < 0) {
-                            // 实时更新设置界面的偏移（1:1跟随手指移动）
-                            settings_ui_update_swipe_offset(delta_y);
+
+                    int delta_x = (int)screen_x - (int)swipe_start_x;
+                    int delta_y = (int)screen_y - (int)swipe_start_y;
+                    int abs_dx = delta_x >= 0 ? delta_x : -delta_x;
+                    int abs_dy = delta_y >= 0 ? delta_y : -delta_y;
+                    ui_state_t ui_now = ui_state_get_current();
+
+                    // 关闭：Settings 内从底部起滑，向上跟手
+                    if (ui_now == UI_STATE_SETTINGS && bottom_touch_hint_active &&
+                        !settings_close_pending && delta_y < 0) {
+                        settings_sheet_apply_offset(delta_y);
+                    }
+
+                    // 打开：主界面下滑时创建 Settings 预览并跟手落下
+                    if (ui_now != UI_STATE_SETTINGS && !settings_close_pending &&
+                        abs_dy > abs_dx && delta_y >= SWIPE_FOLLOW_START_PX &&
+                        abs_dx <= SWIPE_MAX_Y_DEVIATION) {
+                        if (settings_sheet_ensure_preview()) {
+                            settings_sheet_apply_offset(-EXAMPLE_LCD_V_RES + delta_y);
                         }
                     }
                 }
@@ -725,23 +793,48 @@ static void touch_monitor_task(void *arg) {
             if (swipe_active) {
                 // 滑动结束，使用最后记录的位置检测滑动方向
                 uint32_t swipe_duration = current_time - swipe_start_time;
+                int release_dy = (int)swipe_last_y - (int)swipe_start_y;
                 
-                // 检查是否允许上滑：只有在设置界面且从底部区域开始触摸才允许
-                bool allow_up_swipe = (ui_state_get_current() == UI_STATE_SETTINGS) && bottom_touch_hint_active;
-                printf("🔍 SWIPE DEBUG: UI_STATE=%d, bottom_hint_active=%d, allow_up_swipe=%d\n", 
-                       ui_state_get_current(), bottom_touch_hint_active, allow_up_swipe);
-                
-                swipe_direction_t direction = detect_swipe(swipe_start_x, swipe_start_y, 
-                                                          swipe_last_x, swipe_last_y, swipe_duration, allow_up_swipe);
-                
-                if (direction != SWIPE_NONE) {
-                    printf("🚀 SWIPE: Completed - processing direction %d\n", direction);
-                    handle_swipe_switch(direction);
-                }
-                
-                // 滑动结束，重置设置界面的视觉偏移
-                if (ui_state_get_current() == UI_STATE_SETTINGS) {
-                    settings_ui_update_swipe_offset(0);  // 重置到原始位置
+                // 打开预览：按跟手进度决定提交或取消
+                if (settings_open_preview) {
+                    if (release_dy >= SWIPE_OPEN_COMMIT_PX ||
+                        settings_drag_offset > -(EXAMPLE_LCD_V_RES * 3 / 4)) {
+                        printf("🚀 SWIPE: Open preview committed (dy=%d, offset=%d)\n",
+                               release_dy, settings_drag_offset);
+                        settings_sheet_apply_offset(0);
+                        settings_open_preview = false;
+                        handle_swipe_switch(SWIPE_DOWN);
+                    } else {
+                        printf("🚀 SWIPE: Open preview cancelled (dy=%d, offset=%d)\n",
+                               release_dy, settings_drag_offset);
+                        settings_sheet_cancel_preview();
+                    }
+                } else {
+                    // 检查是否允许上滑：只有在设置界面且从底部区域开始触摸才允许
+                    bool allow_up_swipe = (ui_state_get_current() == UI_STATE_SETTINGS) && bottom_touch_hint_active;
+                    printf("🔍 SWIPE DEBUG: UI_STATE=%d, bottom_hint_active=%d, allow_up_swipe=%d\n", 
+                           ui_state_get_current(), bottom_touch_hint_active, allow_up_swipe);
+                    
+                    swipe_direction_t direction = detect_swipe(swipe_start_x, swipe_start_y, 
+                                                              swipe_last_x, swipe_last_y, swipe_duration, allow_up_swipe);
+
+                    // 跟手超过阈值时，即使时间窗未命中也允许关闭
+                    if (allow_up_swipe && direction == SWIPE_NONE &&
+                        settings_drag_offset <= -SWIPE_CLOSE_COMMIT_PX) {
+                        direction = SWIPE_UP;
+                    }
+                    
+                    if (direction != SWIPE_NONE) {
+                        printf("🚀 SWIPE: Completed - processing direction %d\n", direction);
+                        if (direction == SWIPE_UP) {
+                            // 保持当前偏移，避免先弹回展开再关闭
+                            settings_close_pending = true;
+                        }
+                        handle_swipe_switch(direction);
+                    } else if (ui_state_get_current() == UI_STATE_SETTINGS && !settings_close_pending) {
+                        // 未触发关闭：弹回完全展开
+                        settings_sheet_apply_offset(0);
+                    }
                 }
                 
                 swipe_active = false;
@@ -751,7 +844,10 @@ static void touch_monitor_task(void *arg) {
             // 注意：这个重置要在滑动检测之后，避免影响allow_up_swipe判断
             if (ui_state_get_current() == UI_STATE_SETTINGS && bottom_touch_hint_active) {
                 bottom_touch_hint_active = false;
-                settings_ui_update_swipe_hint(false);
+                if (example_lvgl_lock(30)) {
+                    settings_ui_update_swipe_hint(false);
+                    example_lvgl_unlock();
+                }
             }
         }
         
