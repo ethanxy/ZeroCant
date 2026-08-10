@@ -681,9 +681,10 @@ void qmi8658_config_reg(unsigned char low_power)
 	{		
 		g_imu.cfg.enSensors = QMI8658_ACCGYR_ENABLE;
 		g_imu.cfg.accRange = Qmi8658AccRange_8g;
-		g_imu.cfg.accOdr = Qmi8658AccOdr_250Hz;
+		/* 应用刷新 40Hz：选最接近推荐 100Hz 的档位 125Hz（无 100Hz） */
+		g_imu.cfg.accOdr = Qmi8658AccOdr_125Hz;
 		g_imu.cfg.gyrRange = Qmi8658GyrRange_1024dps;
-		g_imu.cfg.gyrOdr = Qmi8658GyrOdr_250Hz;
+		g_imu.cfg.gyrOdr = Qmi8658GyrOdr_125Hz;
 	}
 	
 	if(g_imu.cfg.enSensors & QMI8658_ACC_ENABLE)

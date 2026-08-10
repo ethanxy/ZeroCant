@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -12,6 +13,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_system.h" // 添加用于重启原因检测
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"  // 添加NVS支持
 #include "nvs.h"        // 添加NVS操作
 
@@ -177,45 +179,213 @@ static bool example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, 
     return false;
 }
 
+static lv_color_t *s_burn_flush_scratch = NULL;
+static size_t s_burn_flush_scratch_px = 0;
+static volatile bool s_burn_need_invalidate = false;
+
 static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
 {
-    // 边界保护和指针检查
     if (!area || !color_map) {
         ESP_LOGE(TAG, "LVGL flush_cb: area or color_map is NULL! area=%p color_map=%p", area, color_map);
         lv_disp_flush_ready(drv);
         return;
     }
     if (area->x1 < 0 || area->x2 >= EXAMPLE_LCD_H_RES || area->y1 < 0 || area->y2 >= EXAMPLE_LCD_V_RES) {
-        ESP_LOGE(TAG, "LVGL flush_cb: area out of bounds! x1=%d x2=%d y1=%d y2=%d", area->x1, area->x2, area->y1, area->y2);
+        ESP_LOGE(TAG, "LVGL flush_cb: area out of bounds! x1=%d x2=%d y1=%d y2=%d",
+                 area->x1, area->x2, area->y1, area->y2);
         lv_disp_flush_ready(drv);
         return;
     }
-    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t) drv->user_data;
-    const int offsetx1 = area->x1 + 0x14;
-    const int offsetx2 = area->x2 + 0x14;
-    const int offsety1 = area->y1;
-    const int offsety2 = area->y2;
 
+    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t)drv->user_data;
+    int8_t burn_ox = 0;
+    int8_t burn_oy = 0;
+    amoled_burn_protection_get_offset(&burn_ox, &burn_oy);
+
+    const int src_w = area->x2 - area->x1 + 1;
+    const int src_h = area->y2 - area->y1 + 1;
+    int dst_x = area->x1 + burn_ox;
+    int dst_y = area->y1 + burn_oy;
+    int copy_w = src_w;
+    int copy_h = src_h;
+    int src_x0 = 0;
+    int src_y0 = 0;
+
+    if (burn_ox == 0 && burn_oy == 0) {
 #if LCD_BIT_PER_PIXEL == 24
-    uint8_t *to = (uint8_t *)color_map;
-    uint8_t temp = 0;
-    uint16_t pixel_num = (offsetx2 - offsetx1 + 1) * (offsety2 - offsety1 + 1);
-
-    // Special dealing for first pixel
-    temp = color_map[0].ch.blue;
-    *to++ = color_map[0].ch.red;
-    *to++ = color_map[0].ch.green;
-    *to++ = temp;
-    // Normal dealing for other pixels
-    for (int i = 1; i < pixel_num; i++) {
-        *to++ = color_map[i].ch.red;
-        *to++ = color_map[i].ch.green;
-        *to++ = color_map[i].ch.blue;
-    }
+        uint8_t *to = (uint8_t *)color_map;
+        uint8_t temp = color_map[0].ch.blue;
+        uint16_t pixel_num = (uint16_t)(src_w * src_h);
+        *to++ = color_map[0].ch.red;
+        *to++ = color_map[0].ch.green;
+        *to++ = temp;
+        for (int i = 1; i < pixel_num; i++) {
+            *to++ = color_map[i].ch.red;
+            *to++ = color_map[i].ch.green;
+            *to++ = color_map[i].ch.blue;
+        }
 #endif
+        esp_lcd_panel_draw_bitmap(panel_handle,
+                                  area->x1 + 0x14, area->y1,
+                                  area->x2 + 0x14 + 1, area->y2 + 1,
+                                  color_map);
+        return;
+    }
 
-    // copy a buffer's content to a specific area of the display
-    esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
+    if (dst_x < 0) {
+        src_x0 = -dst_x;
+        copy_w -= src_x0;
+        dst_x = 0;
+    }
+    if (dst_y < 0) {
+        src_y0 = -dst_y;
+        copy_h -= src_y0;
+        dst_y = 0;
+    }
+    if (dst_x + copy_w > EXAMPLE_LCD_H_RES) {
+        copy_w = EXAMPLE_LCD_H_RES - dst_x;
+    }
+    if (dst_y + copy_h > EXAMPLE_LCD_V_RES) {
+        copy_h = EXAMPLE_LCD_V_RES - dst_y;
+    }
+
+    /*
+     * 偶数对齐优先扩边重叠，禁止把 1/4 缓冲条带裁短，否则接缝会留下黑线/残影。
+     * 防烧屏偏移已限制为偶数，多数块可整块平移。
+     */
+    if ((dst_x & 1) && dst_x > 0 && src_x0 > 0) {
+        dst_x--;
+        src_x0--;
+        copy_w++;
+    } else if (dst_x & 1) {
+        dst_x++;
+        src_x0++;
+        copy_w--;
+    }
+    if ((dst_y & 1) && dst_y > 0 && src_y0 > 0) {
+        dst_y--;
+        src_y0--;
+        copy_h++;
+    } else if (dst_y & 1) {
+        dst_y++;
+        src_y0++;
+        copy_h--;
+    }
+    if ((copy_w & 1) && dst_x + copy_w < EXAMPLE_LCD_H_RES && src_x0 + copy_w < src_w) {
+        copy_w++;
+    } else if (copy_w & 1) {
+        copy_w--;
+    }
+    if ((copy_h & 1) && dst_y + copy_h < EXAMPLE_LCD_V_RES && src_y0 + copy_h < src_h) {
+        copy_h++;
+    } else if (copy_h & 1) {
+        copy_h--;
+    }
+
+    if (copy_w <= 0 || copy_h <= 0 ||
+        src_x0 < 0 || src_y0 < 0 ||
+        src_x0 + copy_w > src_w || src_y0 + copy_h > src_h) {
+        lv_disp_flush_ready(drv);
+        return;
+    }
+
+    /*
+     * 右移后左侧会留旧像素；左移后右侧同理。
+     * 在同一块 DMA 缓冲里补黑边，再一次 draw，避免接缝残点。
+     */
+    int pad_left = 0;
+    int pad_right = 0;
+    int draw_x = dst_x;
+    int draw_w = copy_w;
+    if (burn_ox > 0 && dst_x > 0) {
+        pad_left = dst_x;
+        draw_x = 0;
+        draw_w = dst_x + copy_w;
+    }
+    if (burn_ox < 0) {
+        int right_end = dst_x + copy_w;
+        if (right_end < EXAMPLE_LCD_H_RES) {
+            pad_right = EXAMPLE_LCD_H_RES - right_end;
+            draw_w = copy_w + pad_right;
+        }
+    }
+    if (draw_w & 1) {
+        if (draw_x + draw_w < EXAMPLE_LCD_H_RES) {
+            draw_w++;
+            pad_right++;
+        } else if (draw_w > 1) {
+            draw_w--;
+            if (pad_right > 0) {
+                pad_right--;
+            } else {
+                copy_w--;
+            }
+        }
+    }
+    if ((draw_x & 1) && draw_x > 0) {
+        draw_x--;
+        pad_left++;
+        draw_w++;
+    } else if (draw_x & 1) {
+        draw_x++;
+        if (pad_left > 0) {
+            pad_left--;
+            draw_w--;
+        }
+    }
+
+    const bool need_pack = (pad_left > 0 || pad_right > 0 || src_x0 != 0 || src_y0 != 0 ||
+                            copy_w != src_w || copy_h != src_h || draw_w != copy_w);
+    const lv_color_t *blit_src = color_map;
+
+    if (need_pack) {
+        size_t need_px = (size_t)draw_w * (size_t)copy_h;
+        if (!s_burn_flush_scratch || s_burn_flush_scratch_px < need_px) {
+            size_t alloc_px = EXAMPLE_LCD_H_RES * EXAMPLE_LVGL_BUF_HEIGHT;
+            if (alloc_px < need_px) {
+                alloc_px = need_px;
+            }
+            lv_color_t *fresh = (lv_color_t *)heap_caps_malloc(
+                alloc_px * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+            if (!fresh) {
+                fresh = (lv_color_t *)heap_caps_malloc(
+                    alloc_px * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+            }
+            if (!fresh) {
+                lv_disp_flush_ready(drv);
+                return;
+            }
+            if (s_burn_flush_scratch) {
+                heap_caps_free(s_burn_flush_scratch);
+            }
+            s_burn_flush_scratch = fresh;
+            s_burn_flush_scratch_px = alloc_px;
+        }
+
+        const lv_color_t black = lv_color_black();
+        for (int row = 0; row < copy_h; row++) {
+            lv_color_t *dst_row = s_burn_flush_scratch + row * draw_w;
+            int col = 0;
+            for (; col < pad_left; col++) {
+                dst_row[col] = black;
+            }
+            memcpy(dst_row + pad_left,
+                   color_map + (src_y0 + row) * src_w + src_x0,
+                   (size_t)copy_w * sizeof(lv_color_t));
+            col = pad_left + copy_w;
+            for (; col < draw_w; col++) {
+                dst_row[col] = black;
+            }
+        }
+        blit_src = s_burn_flush_scratch;
+    }
+
+    esp_lcd_panel_draw_bitmap(panel_handle,
+                              draw_x + 0x14,
+                              dst_y,
+                              draw_x + 0x14 + draw_w,
+                              dst_y + copy_h,
+                              blit_src);
 }
 
 void example_lvgl_rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area)
@@ -239,6 +409,9 @@ void example_lvgl_rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area)
 static void transform_touch_coordinates(uint16_t raw_x, uint16_t raw_y, uint16_t *screen_x, uint16_t *screen_y) {
     *screen_x = raw_y;  // Y轴成为X轴
     *screen_y = raw_x;  // X轴成为Y轴
+
+    /* 与刷屏像素微移对齐：物理坐标 → 逻辑 UI 坐标 */
+    amoled_burn_protection_map_touch(screen_x, screen_y);
     
     // 边界检查
     if (*screen_x >= EXAMPLE_LCD_H_RES) *screen_x = EXAMPLE_LCD_H_RES - 1;
@@ -292,6 +465,12 @@ void example_lvgl_unlock(void)
     xSemaphoreGive(lvgl_mux);
 }
 
+static void burn_protection_on_offset_changed(void)
+{
+    /* 勿在 esp_timer 回调里抢 LVGL 锁，延后到 LVGL 任务内 invalidate */
+    s_burn_need_invalidate = true;
+}
+
 static void example_lvgl_port_task(void *arg)
 {
     ESP_LOGI(TAG, "Starting LVGL task");
@@ -299,6 +478,22 @@ static void example_lvgl_port_task(void *arg)
     while (1) {
         // Lock the mutex due to the LVGL APIs are not thread-safe
         if (example_lvgl_lock(-1)) {
+            if (s_burn_need_invalidate) {
+                s_burn_need_invalidate = false;
+                lv_obj_t *scr = lv_scr_act();
+                if (scr) {
+                    lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+                    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+                    lv_obj_invalidate(scr);
+                    uint32_t n = lv_obj_get_child_cnt(scr);
+                    for (uint32_t i = 0; i < n; i++) {
+                        lv_obj_t *child = lv_obj_get_child(scr, i);
+                        if (child) {
+                            lv_obj_invalidate(child);
+                        }
+                    }
+                }
+            }
             task_delay_ms = lv_timer_handler();
             // Release the mutex
             example_lvgl_unlock();
@@ -550,23 +745,26 @@ void app_main(void)
             ESP_LOGE(TAG, "Failed to initialize laser hardware: %s", esp_err_to_name(laser_ret));
         }
         
-        // 暂时禁用AMOLED防烧屏保护功能，因为它会导致LVGL内存访问错误
-        // TODO: 需要重新设计一个更安全的防烧屏实现方式
-        ESP_LOGI(TAG, "AMOLED burn protection disabled for stability");
-        /*
-        ESP_LOGI(TAG, "Initializing AMOLED burn protection...");
-        esp_err_t ret = amoled_burn_protection_init(NULL);
-        if (ret == ESP_OK) {
-            ret = amoled_burn_protection_start();
-            if (ret == ESP_OK) {
-                ESP_LOGI(TAG, "AMOLED burn protection started successfully");
+        ESP_LOGI(TAG, "Initializing AMOLED burn protection (5min / ±2px even)...");
+        amoled_burn_protection_config_t burn_cfg = {
+            .offset_interval_ms = 300000,  /* 5 minutes */
+            .max_offset_pixels = 2,        /* even only: avoids 1/4-buffer seam artifacts */
+            .enable_random_offset = false,
+            .on_offset_changed = burn_protection_on_offset_changed,
+        };
+        esp_err_t burn_ret = amoled_burn_protection_init(&burn_cfg);
+        if (burn_ret == ESP_OK) {
+            burn_ret = amoled_burn_protection_start();
+            if (burn_ret == ESP_OK) {
+                ESP_LOGI(TAG, "AMOLED burn protection started");
             } else {
-                ESP_LOGE(TAG, "Failed to start AMOLED burn protection: %s", esp_err_to_name(ret));
+                ESP_LOGE(TAG, "Failed to start AMOLED burn protection: %s",
+                         esp_err_to_name(burn_ret));
             }
         } else {
-            ESP_LOGE(TAG, "Failed to initialize AMOLED burn protection: %s", esp_err_to_name(ret));
+            ESP_LOGE(TAG, "Failed to init AMOLED burn protection: %s",
+                     esp_err_to_name(burn_ret));
         }
-        */
         
         //lv_demo_widgets();      /* A widgets example */
         //lv_demo_music();      /* A modern, smartphone-like music player demo. */

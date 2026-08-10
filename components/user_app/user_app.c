@@ -30,6 +30,7 @@ extern uint8_t loadSavedBrightness(void);  // NVS亮度加载函数
 #include "esp_task_wdt.h"
 #include "touch_bsp.h"
 #include "ui_state_manager.h" // 添加UI状态管理器
+#include "amoled_burn_protection.h"
 
 #define EXAMPLE_LCD_H_RES 280
 #define EXAMPLE_LCD_V_RES 456
@@ -167,6 +168,9 @@ static void transform_touch_coordinates(uint16_t raw_x, uint16_t raw_y, uint16_t
     
     *screen_x = raw_y;  // Y轴成为X轴 (1-21 -> 1-21，这个映射看起来正确)
     *screen_y = raw_x;  // X轴成为Y轴，但不翻转 (449-455 -> 449-455，这应该映射到底部)
+
+    /* 与刷屏像素微移对齐 */
+    amoled_burn_protection_map_touch(screen_x, screen_y);
     
     // 边界检查
     if (*screen_x >= EXAMPLE_LCD_H_RES) *screen_x = EXAMPLE_LCD_H_RES - 1;
@@ -625,9 +629,15 @@ static void angle_update_task(void *arg) {
             }
             
             if (current_ui_state == UI_STATE_ANGLE && current_display_mode == DISPLAY_MODE_ANGLE) {
-                angle_display_update(pitch, roll);
+                if (example_lvgl_lock(40)) {
+                    angle_display_update(pitch, roll);
+                    example_lvgl_unlock();
+                }
             } else if (current_ui_state == UI_STATE_LEVEL && current_display_mode == DISPLAY_MODE_LEVEL) {
-                level_display_update(roll); // level display只需要roll角度
+                if (example_lvgl_lock(40)) {
+                    level_display_update(roll);
+                    example_lvgl_unlock();
+                }
             } else if (current_ui_state == UI_STATE_LASER && current_display_mode == DISPLAY_MODE_LASER) {
                 // laser模式：不需要周期性更新，距离只在测量时显示
             } else if (current_ui_state == UI_STATE_SETTINGS && current_display_mode == DISPLAY_MODE_SETTINGS) {
@@ -637,18 +647,19 @@ static void angle_update_task(void *arg) {
                     last_voltage_update = now;
                     float battery_voltage;
                     adc_get_value(&battery_voltage);
-                    settings_ui_update_battery_info(battery_voltage); // 同时更新电压和百分比
-                    
-                    // 同时更新亮度显示
-                    uint8_t current_brightness = getBrightness();
-                    settings_ui_update_brightness(current_brightness);
+                    if (example_lvgl_lock(40)) {
+                        settings_ui_update_battery_info(battery_voltage);
+                        uint8_t current_brightness = getBrightness();
+                        settings_ui_update_brightness(current_brightness);
+                        example_lvgl_unlock();
+                    }
                 }
             }
         }
         
         // 主动让出CPU时间
         taskYIELD();
-        vTaskDelay(pdMS_TO_TICKS(50)); // 恢复20Hz刷新频率
+        vTaskDelay(pdMS_TO_TICKS(25)); // 40Hz 刷新
     }
 }
 
@@ -918,7 +929,7 @@ static void sensor_init_task(void *pvParameters)
     ESP_LOGI("sensor_init", "Starting sensor initialization in background...");
     
     // 在后台完成传感器校准（包含2.2秒延迟）
-    angle_calc_init(0.05f, 0.3f); // 50ms, beta=0.3
+    angle_calc_init(0.025f, 0.3f); // 25ms @ 40Hz, beta=0.3
     angle_calc_set_pitch_lpf_alpha(0.2f); // 设置pitch低通滤波系数为0.2，更平滑
     angle_calc_set_roll_lpf_alpha(0.15f);  // 设置roll低通滤波系数为0.15，比pitch更平滑以减少视觉抖动
     

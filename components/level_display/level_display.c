@@ -5,15 +5,19 @@
 #include "freertos/task.h"
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 static lv_obj_t *level_canvas = NULL;
 static int disp_width = 240;
 static int disp_height = 240;
 static lv_color_t *cbuf = NULL;
+static bool s_has_last_color = false;
+static lv_color_t s_last_color;
 
 void level_display_init(lv_obj_t *parent, int screen_width, int screen_height) {
     disp_width = screen_width;
     disp_height = screen_height;
+    s_has_last_color = false;
     
     printf("level_display_init: initializing %dx%d display\n", disp_width, disp_height);
     
@@ -72,6 +76,13 @@ void level_display_update(float roll) {
     } else {
         color = lv_color_hex(0xFF0000); // 红色：>±1°
     }
+
+    /* 颜色未变则跳过整屏 fill，避免 40Hz 下长时间占住 LVGL 锁 */
+    if (s_has_last_color && s_last_color.full == color.full) {
+        return;
+    }
+    s_has_last_color = true;
+    s_last_color = color;
     
     lv_canvas_fill_bg(level_canvas, color, LV_OPA_COVER);
 }
@@ -97,6 +108,7 @@ void level_display_cleanup(void) {
         heap_caps_free(cbuf);
         cbuf = NULL;
     }
+    s_has_last_color = false;
     
     printf("level_display_cleanup: completed\n");
 }
