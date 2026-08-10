@@ -77,6 +77,8 @@ static int settings_drag_offset = 0;          // 当前 sheet 偏移（0=展开�
 #define SWIPE_FOLLOW_START_PX 10 // 开始跟手预览的最小位移
 #define SWIPE_OPEN_COMMIT_PX 100 // 下滑松手后确认打开
 #define SWIPE_CLOSE_COMMIT_PX 40 // 上滑松手后确认关闭
+/* 主界面底部为按键区：从此处起滑不触发 Settings 打开预览，避免抢走 Measure 等点击 */
+#define SWIPE_OPEN_EXCLUDE_BOTTOM_PX 100
 
 // Settings模式的电压读取控制
 static uint32_t last_voltage_update = 0;
@@ -782,7 +784,9 @@ static void touch_monitor_task(void *arg) {
                     }
 
                     // 打开：主界面下滑时创建 Settings 预览并跟手落下
+                    // 起点在底部按键区时忽略，避免轻触 Measure 时被当成下滑
                     if (ui_now != UI_STATE_SETTINGS && !settings_close_pending &&
+                        swipe_start_y < (EXAMPLE_LCD_V_RES - SWIPE_OPEN_EXCLUDE_BOTTOM_PX) &&
                         abs_dy > abs_dx && delta_y >= SWIPE_FOLLOW_START_PX &&
                         abs_dx <= SWIPE_MAX_Y_DEVIATION) {
                         if (settings_sheet_ensure_preview()) {

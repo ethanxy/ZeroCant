@@ -18,8 +18,21 @@ static const char* TAG = "laser";
 static lv_obj_t *laser_screen = NULL;
 static lv_obj_t *status_label = NULL;
 static lv_obj_t *measure_btn = NULL;  // 新增：测量按钮
+static lv_obj_t *hold_guide = NULL;   // Hold 左右方向引导
+static lv_obj_t *hold_hint_left = NULL;
+static lv_obj_t *hold_hint_right = NULL;
+static lv_obj_t *hold_value_label = NULL;
+static lv_obj_t *hold_unit_label = NULL;
 static int screen_width = 240;
 static int screen_height = 240;
+
+#define HOLD_DEADBAND_MIL   0.05f
+#define HOLD_SIDE_SIZE      56
+#define HOLD_COLOR_ACTIVE   0x3DFF9A
+#define HOLD_COLOR_IDLE     0x555555
+
+static void laser_ui_hold_guide_hide(void);
+static void laser_ui_hold_guide_show(float hold_mil, bool valid);
 
 // 硬件相关变量
 static bool hardware_initialized = false;
@@ -55,6 +68,159 @@ static void measure_btn_event_cb(lv_event_t * e) {
     }
 }
 
+static void hold_pulse_anim_cb(void *obj, int32_t v)
+{
+    if (obj && lv_obj_is_valid(obj)) {
+        lv_obj_set_style_text_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+    }
+}
+
+static void laser_ui_hold_guide_stop_anim(void)
+{
+    if (hold_hint_left && lv_obj_is_valid(hold_hint_left)) {
+        lv_anim_del(hold_hint_left, hold_pulse_anim_cb);
+        lv_obj_set_style_text_opa(hold_hint_left, LV_OPA_COVER, 0);
+    }
+    if (hold_hint_right && lv_obj_is_valid(hold_hint_right)) {
+        lv_anim_del(hold_hint_right, hold_pulse_anim_cb);
+        lv_obj_set_style_text_opa(hold_hint_right, LV_OPA_COVER, 0);
+    }
+}
+
+static void laser_ui_hold_guide_pulse(lv_obj_t *label)
+{
+    if (!label || !lv_obj_is_valid(label)) {
+        return;
+    }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, label);
+    lv_anim_set_values(&a, LV_OPA_50, LV_OPA_COVER);
+    lv_anim_set_time(&a, 650);
+    lv_anim_set_playback_time(&a, 650);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_exec_cb(&a, hold_pulse_anim_cb);
+    lv_anim_start(&a);
+}
+
+static void style_hold_side(lv_obj_t *label, bool active)
+{
+    lv_color_t color = lv_color_hex(active ? HOLD_COLOR_ACTIVE : HOLD_COLOR_IDLE);
+    lv_obj_set_style_text_color(label, color, 0);
+    lv_obj_set_style_text_opa(label, active ? LV_OPA_COVER : LV_OPA_40, 0);
+}
+
+static void laser_ui_hold_guide_hide(void)
+{
+    laser_ui_hold_guide_stop_anim();
+    if (hold_guide && lv_obj_is_valid(hold_guide)) {
+        lv_obj_add_flag(hold_guide, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void laser_ui_hold_guide_show(float hold_mil, bool valid)
+{
+    if (!hold_guide || !lv_obj_is_valid(hold_guide)) {
+        return;
+    }
+
+    laser_ui_hold_guide_stop_anim();
+    lv_obj_clear_flag(hold_guide, LV_OBJ_FLAG_HIDDEN);
+
+    lv_label_set_text(hold_hint_left, LV_SYMBOL_UP "\nUP");
+    lv_label_set_text(hold_hint_right, LV_SYMBOL_DOWN "\nDN");
+
+    if (!valid) {
+        lv_label_set_text(hold_value_label, "--");
+        style_hold_side(hold_hint_left, false);
+        style_hold_side(hold_hint_right, false);
+        lv_obj_set_style_text_color(hold_value_label, lv_color_hex(HOLD_COLOR_IDLE), 0);
+        return;
+    }
+
+    char mil_text[16];
+    snprintf(mil_text, sizeof(mil_text), "%.2f", fabsf(hold_mil));
+    lv_label_set_text(hold_value_label, mil_text);
+
+    bool up = hold_mil > HOLD_DEADBAND_MIL;
+    bool dn = hold_mil < -HOLD_DEADBAND_MIL;
+
+    style_hold_side(hold_hint_left, up);
+    style_hold_side(hold_hint_right, dn);
+    lv_obj_set_style_text_color(hold_value_label, (up || dn) ? lv_color_hex(HOLD_COLOR_ACTIVE) : lv_color_white(), 0);
+
+    if (up) {
+        laser_ui_hold_guide_pulse(hold_hint_left);
+    } else if (dn) {
+        laser_ui_hold_guide_pulse(hold_hint_right);
+    }
+}
+
+static void laser_ui_hold_guide_create(void)
+{
+    hold_guide = lv_obj_create(laser_screen);
+    lv_obj_set_size(hold_guide, screen_width - 16, 88);
+    lv_obj_align(hold_guide, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_set_style_bg_opa(hold_guide, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(hold_guide, 0, 0);
+    lv_obj_set_style_pad_all(hold_guide, 0, 0);
+    lv_obj_clear_flag(hold_guide, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(hold_guide, LV_OBJ_FLAG_HIDDEN);
+
+    /* 左侧：大号 ↑ / UP（占原半圆区域） */
+    lv_obj_t *left_box = lv_obj_create(hold_guide);
+    lv_obj_set_size(left_box, HOLD_SIDE_SIZE, HOLD_SIDE_SIZE);
+    lv_obj_set_style_bg_opa(left_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(left_box, 0, 0);
+    lv_obj_set_style_pad_all(left_box, 0, 0);
+    lv_obj_clear_flag(left_box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(left_box, LV_ALIGN_LEFT_MID, 8, 0);
+
+    hold_hint_left = lv_label_create(left_box);
+    lv_label_set_text(hold_hint_left, LV_SYMBOL_UP "\nUP");
+    lv_obj_set_style_text_font(hold_hint_left, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_align(hold_hint_left, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_line_space(hold_hint_left, -4, 0);
+    style_hold_side(hold_hint_left, false);
+    lv_obj_center(hold_hint_left);
+
+    /* 中间：Hold 数值 */
+    lv_obj_t *hold_caption = lv_label_create(hold_guide);
+    lv_label_set_text(hold_caption, "HOLD");
+    lv_obj_set_style_text_font(hold_caption, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(hold_caption, lv_color_hex(0x888888), 0);
+    lv_obj_align(hold_caption, LV_ALIGN_CENTER, 0, -28);
+
+    hold_value_label = lv_label_create(hold_guide);
+    lv_label_set_text(hold_value_label, "0.00");
+    lv_obj_set_style_text_font(hold_value_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(hold_value_label, lv_color_white(), 0);
+    lv_obj_align(hold_value_label, LV_ALIGN_CENTER, 0, -4);
+
+    hold_unit_label = lv_label_create(hold_guide);
+    lv_label_set_text(hold_unit_label, "mil");
+    lv_obj_set_style_text_font(hold_unit_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(hold_unit_label, lv_color_hex(0xAAAAAA), 0);
+    lv_obj_align(hold_unit_label, LV_ALIGN_CENTER, 0, 20);
+
+    /* 右侧：大号 ↓ / DN */
+    lv_obj_t *right_box = lv_obj_create(hold_guide);
+    lv_obj_set_size(right_box, HOLD_SIDE_SIZE, HOLD_SIDE_SIZE);
+    lv_obj_set_style_bg_opa(right_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(right_box, 0, 0);
+    lv_obj_set_style_pad_all(right_box, 0, 0);
+    lv_obj_clear_flag(right_box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(right_box, LV_ALIGN_RIGHT_MID, -8, 0);
+
+    hold_hint_right = lv_label_create(right_box);
+    lv_label_set_text(hold_hint_right, LV_SYMBOL_DOWN "\nDN");
+    lv_obj_set_style_text_font(hold_hint_right, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_align(hold_hint_right, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_line_space(hold_hint_right, -4, 0);
+    style_hold_side(hold_hint_right, false);
+    lv_obj_center(hold_hint_right);
+}
+
 void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     screen_width = scr_width;
     screen_height = scr_height;
@@ -62,7 +228,7 @@ void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     printf("laser_ui_init: initializing %dx%d laser UI\n", screen_width, screen_height);
     
     // 强制清理任何已存在的激光UI对象
-    if (laser_screen || status_label || measure_btn) {
+    if (laser_screen || status_label || measure_btn || hold_guide) {
         printf("laser_ui_init: Forcing cleanup of existing UI objects\n");
         laser_ui_cleanup();
     }
@@ -83,6 +249,7 @@ void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     lv_obj_set_style_bg_opa(laser_screen, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(laser_screen, 0, 0);
     lv_obj_set_style_pad_all(laser_screen, 0, 0);
+    lv_obj_clear_flag(laser_screen, LV_OBJ_FLAG_SCROLLABLE);
     
     // 创建状态文本标签（屏幕上方）
     status_label = lv_label_create(laser_screen);
@@ -92,11 +259,13 @@ void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     }
     lv_label_set_text(status_label, "Ready to measure");
     lv_obj_set_style_text_color(status_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_16, 0);  // 多行 Drop/Hold 可读
+    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, 0);
     lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(status_label, screen_width - 24);
-    lv_obj_align(status_label, LV_ALIGN_CENTER, 0, -50);
+    lv_obj_set_width(status_label, screen_width - 36);
+    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 28);
     lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
+
+    laser_ui_hold_guide_create();
     
     // 创建测量按钮（屏幕下方）
     measure_btn = lv_btn_create(laser_screen);
@@ -104,14 +273,19 @@ void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
         printf("laser_ui_init: Failed to create measure_btn!\n");
         return;
     }
-    lv_obj_set_size(measure_btn, 150, 60);  // 扩大按键尺寸，提高触摸有效面积
-    lv_obj_align(measure_btn, LV_ALIGN_CENTER, 0, 40);
+    lv_obj_set_size(measure_btn, 200, 64);
+    lv_obj_align(measure_btn, LV_ALIGN_BOTTOM_MID, 0, -18);
+    lv_obj_set_ext_click_area(measure_btn, 24);
+    /* 手指轻微滑动时仍锁定在按钮上，避免取消 CLICKED */
+    lv_obj_add_flag(measure_btn, LV_OBJ_FLAG_PRESS_LOCK);
+    lv_obj_clear_flag(measure_btn, LV_OBJ_FLAG_SCROLL_CHAIN);
     lv_obj_add_event_cb(measure_btn, measure_btn_event_cb, LV_EVENT_CLICKED, NULL);
     
     // 设置按钮样式（与settings组件Set Level按钮一致）
     lv_obj_set_style_bg_color(measure_btn, lv_color_hex(0x404040), 0);  // 深灰色背景
     lv_obj_set_style_bg_opa(measure_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(measure_btn, 5, 0);
+    lv_obj_set_style_bg_color(measure_btn, lv_color_hex(0x606060), LV_STATE_PRESSED);
+    lv_obj_set_style_radius(measure_btn, 8, 0);
     lv_obj_set_style_border_width(measure_btn, 1, 0);
     lv_obj_set_style_border_color(measure_btn, lv_color_white(), 0);
     
@@ -393,6 +567,7 @@ void laser_start_measurement(void) {
     // 开始测量
     measurement_in_progress = true;
     measurement_result_displayed = false;
+    laser_ui_hold_guide_hide();
     
     // 禁用按钮防止重复点击，并改变按钮文本
     if (measure_btn && lv_obj_is_valid(measure_btn)) {
@@ -439,20 +614,19 @@ void laser_start_measurement(void) {
             snprintf(distance_text, sizeof(distance_text),
                      "Distance: %.2f m\n"
                      "Drop: %.1f in (%.0f mm)\n"
-                     "Hold: %.2f mil\n"
                      "%s",
                      distance_m,
                      bal_out.drop_in,
                      bal_out.drop_m * 1000.0f,
-                     bal_out.hold_mil,
                      ballistic_profile_name());
+            laser_ui_hold_guide_show(bal_out.hold_mil, true);
         } else {
             snprintf(distance_text, sizeof(distance_text),
                      "Distance: %.2f m\n"
-                     "Hold: --\n"
                      "%s",
                      distance_m,
                      ballistic_profile_name());
+            laser_ui_hold_guide_show(0.0f, false);
         }
         laser_ui_set_status_text(distance_text);
         measurement_result_displayed = true;
@@ -477,6 +651,7 @@ void laser_start_measurement(void) {
                 break;
         }
         
+        laser_ui_hold_guide_hide();
         laser_ui_set_status_text(error_message);
         measurement_result_displayed = true;
         ESP_LOGE(TAG, "Measurement failed: %s", esp_err_to_name(ret));
@@ -597,6 +772,8 @@ void laser_hardware_deinit(void) {
 
 void laser_ui_cleanup(void) {
     printf("laser_ui_cleanup: cleaning up laser UI\n");
+
+    laser_ui_hold_guide_stop_anim();
     
     // 删除LVGL对象，添加额外的有效性检查
     if (measure_btn && lv_obj_is_valid(measure_btn)) {
@@ -608,6 +785,13 @@ void laser_ui_cleanup(void) {
         lv_obj_del(status_label);
         status_label = NULL;
     }
+
+    /* hold_guide 及其子对象随 laser_screen 一并删除 */
+    hold_guide = NULL;
+    hold_hint_left = NULL;
+    hold_hint_right = NULL;
+    hold_value_label = NULL;
+    hold_unit_label = NULL;
     
     if (laser_screen && lv_obj_is_valid(laser_screen)) {
         lv_obj_del(laser_screen);
