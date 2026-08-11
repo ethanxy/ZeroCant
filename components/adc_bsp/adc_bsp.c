@@ -27,9 +27,9 @@ static bool temp_sensor_initialized = false;
 #define TEMP_COEFF_PPM_PER_C -200.0f // 温度系数 -200ppm/°C (ESP32典型值)
 #define TEMP_UPDATE_INTERVAL_MS 5000 // 温度更新间隔 5秒
 
-// 电压校准参数 (基于实际测试数据)
-#define VOLTAGE_DIVIDER_RATIO 3.0f   // 标称分压比
-#define VOLTAGE_CORRECTION_FACTOR 1.0196f  // 校准系数 (4.16/4.08 = 1.0196)
+// Waveshare ESP32-S3-Touch-AMOLED-1.64: VBAT -- 200K -- ADC -- 100K -- GND
+// Official: V_BAT = V_ADC * 3  (schematic divider)
+#define VOLTAGE_DIVIDER_RATIO 3.0f
 
 // 滤波和温度校准相关变量
 static float filtered_voltage = 0.0f;
@@ -190,57 +190,41 @@ void adc_bsp_init(void)
     ESP_LOGW(TAG, "ADC calibration not available, using raw conversion");
   }
   
-  // 初始化温度传感器用于温度补偿
+  // 官方电压公式不依赖温度补偿；保留传感器初始化供其它调试用途
   if (temperature_sensor_init()) {
-    ESP_LOGI(TAG, "Temperature compensation enabled");
-    // 获取初始温度
+    ESP_LOGI(TAG, "Temperature sensor available (not used for battery voltage)");
     current_temperature = get_current_temperature();
     last_temp_update = xTaskGetTickCount() * portTICK_PERIOD_MS;
   } else {
-    ESP_LOGW(TAG, "Temperature compensation disabled - using reference temperature");
+    ESP_LOGW(TAG, "Temperature sensor unavailable");
   }
 }
 void adc_get_value(float *value)
 {
-  // 1. 更新温度读数（如果需要）
-  update_temperature_if_needed();
-  
-  // 2. 多次采样取平均
+  // Waveshare official path: ADC1_CH3 (GPIO4), V_BAT = V_pin * 3
   int avg_adc_raw = adc_get_average_raw(ADC_IMMEDIATE_SAMPLES);
-  if(avg_adc_raw < 0) {
+  if (avg_adc_raw < 0) {
     ESP_LOGE(TAG, "All ADC samples failed");
     *value = 0;
     return;
   }
-  
-  float current_voltage;
-  
-  // 3. 官方校准转换
+
+  float pin_v;
   if (do_calibration && adc1_cali_handle) {
     int voltage_mv;
     esp_err_t cali_err = adc_cali_raw_to_voltage(adc1_cali_handle, avg_adc_raw, &voltage_mv);
     if (cali_err == ESP_OK) {
-      current_voltage = ((float)voltage_mv / 1000.0f) * VOLTAGE_DIVIDER_RATIO * VOLTAGE_CORRECTION_FACTOR;
-      ESP_LOGD(TAG, "ADC Raw avg: %d, Calibrated: %d mV, Before temp comp: %.3f V", avg_adc_raw, voltage_mv, current_voltage);
+      pin_v = (float)voltage_mv / 1000.0f;
     } else {
       ESP_LOGW(TAG, "ADC calibration failed, using raw conversion");
-      current_voltage = ((float)avg_adc_raw * 3.3f / 4096.0f) * VOLTAGE_DIVIDER_RATIO * VOLTAGE_CORRECTION_FACTOR;
+      pin_v = (float)avg_adc_raw * 3.3f / 4096.0f;
     }
   } else {
-    current_voltage = ((float)avg_adc_raw * 3.3f / 4096.0f) * VOLTAGE_DIVIDER_RATIO * VOLTAGE_CORRECTION_FACTOR;
-    ESP_LOGD(TAG, "ADC Raw avg: %d, Uncalibrated Before temp comp: %.3f V", avg_adc_raw, current_voltage);
+    pin_v = (float)avg_adc_raw * 3.3f / 4096.0f;
   }
-  
-  // 4. 应用温度补偿
-  float compensated_voltage = apply_temperature_compensation(current_voltage, current_temperature);
-  
-  // 5. 直接返回补偿后的值（无滤波）
-  *value = compensated_voltage;
-  
-  ESP_LOGI(TAG, "ADC Analysis: raw_avg=%d, temp=%.1f°C, mV=%d, before_comp=%.3fV, after_comp=%.3fV", 
-           avg_adc_raw, current_temperature, 
-           (do_calibration && adc1_cali_handle) ? (int)(current_voltage * 1000 / 3.0f) : (int)(avg_adc_raw * 3300 / 4096),
-           current_voltage, compensated_voltage);
+
+  *value = pin_v * VOLTAGE_DIVIDER_RATIO;
+  ESP_LOGD(TAG, "ADC raw_avg=%d pin=%.3fV bat=%.3fV", avg_adc_raw, pin_v, *value);
 }
 // ADC校准反初始化函数
 static void adc_calibration_deinit(adc_cali_handle_t handle)
@@ -288,12 +272,12 @@ void adc_get_raw_voltage(float *raw_voltage, float *filtered_voltage_out)
         int voltage_mv;
         esp_err_t cali_err = adc_cali_raw_to_voltage(adc1_cali_handle, avg_adc_raw, &voltage_mv);
         if (cali_err == ESP_OK) {
-            *raw_voltage = ((float)voltage_mv / 1000.0f) * VOLTAGE_DIVIDER_RATIO * VOLTAGE_CORRECTION_FACTOR;
+            *raw_voltage = ((float)voltage_mv / 1000.0f) * VOLTAGE_DIVIDER_RATIO;
         } else {
-            *raw_voltage = ((float)avg_adc_raw * 3.3f / 4096.0f) * VOLTAGE_DIVIDER_RATIO * VOLTAGE_CORRECTION_FACTOR;
+            *raw_voltage = ((float)avg_adc_raw * 3.3f / 4096.0f) * VOLTAGE_DIVIDER_RATIO;
         }
     } else {
-        *raw_voltage = ((float)avg_adc_raw * 3.3f / 4096.0f) * VOLTAGE_DIVIDER_RATIO * VOLTAGE_CORRECTION_FACTOR;
+        *raw_voltage = ((float)avg_adc_raw * 3.3f / 4096.0f) * VOLTAGE_DIVIDER_RATIO;
     }
     
     *filtered_voltage_out = filtered_voltage;
