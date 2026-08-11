@@ -305,12 +305,10 @@ bool ui_state_is_transition_valid(ui_state_t from_state, ui_state_t to_state) {
 
 // 内部函数实现
 static void ui_state_manager_task(void *pvParameters) {
-    ESP_LOGE(TAG, "🚀 UI state manager task STARTED - This should appear in logs!");
     ESP_LOGI(TAG, "UI state manager task started");
     
-    // 确保任务真的在运行
     vTaskDelay(pdMS_TO_TICKS(100));
-    ESP_LOGE(TAG, "🚀 UI state manager task is RUNNING after delay");
+    ESP_LOGI(TAG, "UI state manager task running");
     
     ui_command_message_t cmd;
     TickType_t queue_timeout;
@@ -320,7 +318,7 @@ static void ui_state_manager_task(void *pvParameters) {
         loop_count++;
         
         if (loop_count == 1) {
-            ESP_LOGE(TAG, "🚀 Entering main task loop, g_initialized=%d", g_initialized);
+            ESP_LOGI(TAG, "Entering main task loop, g_initialized=%d", g_initialized);
         }
         
         // 根据当前状态设置队列超时

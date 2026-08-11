@@ -181,7 +181,7 @@ static void transform_touch_coordinates(uint16_t raw_x, uint16_t raw_y, uint16_t
 // 检查触摸是否在左下角切换区域内（已弃用 - 改为滑动切换）
 /*
 static bool is_touch_in_switch_area(uint16_t x, uint16_t y) {
-    printf("🔍 COORDINATE DEBUG: screen(%d,%d) vs switch_area(x=%d-%d, y=%d-%d)\n", 
+    printf("COORDINATE DEBUG: screen(%d,%d) vs switch_area(x=%d-%d, y=%d-%d)\n", 
            x, y, TOUCH_AREA_X1, TOUCH_AREA_X2, TOUCH_AREA_Y1, TOUCH_AREA_Y2);
     
     // 额外的区域分析 - 帮助理解坐标系
@@ -195,7 +195,7 @@ static bool is_touch_in_switch_area(uint16_t x, uint16_t y) {
     } else {
         region = "右下角";
     }
-    printf("🎯 触摸区域分析: %s (屏幕四等分)\n", region);
+    printf("触摸区域分析: %s (屏幕四等分)\n", region);
     
     return (x <= TOUCH_AREA_X2 && 
             y >= TOUCH_AREA_Y1 && y <= TOUCH_AREA_Y2);
@@ -232,7 +232,7 @@ static bool settings_sheet_ensure_preview(void) {
         return true;
     }
     if (!example_lvgl_lock(100)) {
-        printf("❌ SETTINGS PREVIEW: Failed to lock LVGL\n");
+        printf("SETTINGS PREVIEW: Failed to lock LVGL\n");
         return false;
     }
     settings_ui_init(lv_scr_act(), EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES);
@@ -268,12 +268,12 @@ static swipe_direction_t detect_swipe(uint16_t start_x, uint16_t start_y, uint16
     if (!is_settings_exit_swipe) {
         // 对非settings退出的滑动保持原有时间限制
         if (duration_ms < SWIPE_MIN_TIME_MS || duration_ms > SWIPE_MAX_TIME_MS) {
-            printf("⏱️ SWIPE: Invalid duration (%dms), range: %d-%dms\n", 
+            printf("SWIPE: Invalid duration (%dms), range: %d-%dms\n", 
                    (int)duration_ms, SWIPE_MIN_TIME_MS, SWIPE_MAX_TIME_MS);
             return SWIPE_NONE;
         }
     } else {
-        printf("⏱️ SWIPE: Settings exit swipe - time limit bypassed (duration: %dms)\n", (int)duration_ms);
+        printf("SWIPE: Settings exit swipe - time limit bypassed (duration: %dms)\n", (int)duration_ms);
     }
     
     // 判断是水平滑动还是垂直滑动
@@ -285,16 +285,16 @@ static swipe_direction_t detect_swipe(uint16_t start_x, uint16_t start_y, uint16
         
         // 检查Y轴偏移是否在允许范围内
         if (abs_dy > SWIPE_MAX_Y_DEVIATION) {
-            printf("📐 SWIPE: Excessive Y deviation (%d > %d) for horizontal swipe\n", abs_dy, SWIPE_MAX_Y_DEVIATION);
+            printf("SWIPE: Excessive Y deviation (%d > %d) for horizontal swipe\n", abs_dy, SWIPE_MAX_Y_DEVIATION);
             return SWIPE_NONE;
         }
         
         // 确定水平滑动方向
         if (dx > 0) {
-            printf("➡️ SWIPE: Detected RIGHT swipe (previous main module)\n");
+            printf("SWIPE: Detected RIGHT swipe (previous main module)\n");
             return SWIPE_RIGHT;
         } else {
-            printf("⬅️ SWIPE: Detected LEFT swipe (next main module)\n");
+            printf("SWIPE: Detected LEFT swipe (next main module)\n");
             return SWIPE_LEFT;
         }
     } else {
@@ -308,21 +308,21 @@ static swipe_direction_t detect_swipe(uint16_t start_x, uint16_t start_y, uint16
         
         // 检查X轴偏移是否在允许范围内（复用SWIPE_MAX_Y_DEVIATION作为X轴偏移限制）
         if (abs_dx > SWIPE_MAX_Y_DEVIATION) {
-            printf("📐 SWIPE: Excessive X deviation (%d > %d) for vertical swipe\n", abs_dx, SWIPE_MAX_Y_DEVIATION);
+            printf("SWIPE: Excessive X deviation (%d > %d) for vertical swipe\n", abs_dx, SWIPE_MAX_Y_DEVIATION);
             return SWIPE_NONE;
         }
         
         // 确定垂直滑动方向
         if (dy > 0) {
-            printf("⬇️ SWIPE: Detected DOWN swipe (enter settings)\n");
+            printf("SWIPE: Detected DOWN swipe (enter settings)\n");
             return SWIPE_DOWN;
         } else {
             // 上滑检测 - 需要检查是否允许
             if (!allow_up_swipe) {
-                printf("🚫 SWIPE: UP swipe not allowed (not started from bottom area)\n");
+                printf("SWIPE: UP swipe not allowed (not started from bottom area)\n");
                 return SWIPE_NONE;
             }
-            printf("⬆️ SWIPE: Detected UP swipe (exit settings) - started from bottom\n");
+            printf("SWIPE: Detected UP swipe (exit settings) - started from bottom\n");
             return SWIPE_UP;
         }
     }
@@ -339,7 +339,7 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
         case SWIPE_LEFT:
             // 向左滑 - 下一个主模组 (仅限 Angle, Level, Laser)
             if (current_display_mode == DISPLAY_MODE_SETTINGS) {
-                printf("🚫 SWIPE LEFT: Settings mode doesn't support horizontal switching\n");
+                printf("SWIPE LEFT: Settings mode doesn't support horizontal switching\n");
                 return false;
             }
             
@@ -349,13 +349,13 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
                 case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_ANGLE; break;
                 default: return false;
             }
-            printf("🔄 SWIPE LEFT: %d -> %d (next main module)\n", current_display_mode, new_mode);
+            printf("SWIPE LEFT: %d -> %d (next main module)\n", current_display_mode, new_mode);
             break;
             
         case SWIPE_RIGHT:
             // 向右滑 - 上一个主模组 (仅限 Angle, Level, Laser)
             if (current_display_mode == DISPLAY_MODE_SETTINGS) {
-                printf("🚫 SWIPE RIGHT: Settings mode doesn't support horizontal switching\n");
+                printf("SWIPE RIGHT: Settings mode doesn't support horizontal switching\n");
                 return false;
             }
             
@@ -365,31 +365,31 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
                 case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_LEVEL; break;
                 default: return false;
             }
-            printf("🔄 SWIPE RIGHT: %d -> %d (previous main module)\n", current_display_mode, new_mode);
+            printf("SWIPE RIGHT: %d -> %d (previous main module)\n", current_display_mode, new_mode);
             break;
             
         case SWIPE_DOWN:
             // 向下滑 - 进入Settings模组
             if (current_display_mode == DISPLAY_MODE_SETTINGS) {
-                printf("🚫 SWIPE DOWN: Already in Settings mode\n");
+                printf("SWIPE DOWN: Already in Settings mode\n");
                 return false;
             }
             
             // 记录当前主模组状态
             previous_main_mode = current_display_mode;
             new_mode = DISPLAY_MODE_SETTINGS;
-            printf("🔄 SWIPE DOWN: %d -> Settings (saved previous: %d)\n", current_display_mode, previous_main_mode);
+            printf("SWIPE DOWN: %d -> Settings (saved previous: %d)\n", current_display_mode, previous_main_mode);
             break;
             
         case SWIPE_UP:
             // 向上滑 - 退出Settings模组，回到上一次的主模组
             if (current_display_mode != DISPLAY_MODE_SETTINGS) {
-                printf("🚫 SWIPE UP: Not in Settings mode\n");
+                printf("SWIPE UP: Not in Settings mode\n");
                 return false;
             }
             
             new_mode = previous_main_mode;
-            printf("🔄 SWIPE UP: Settings -> %d (restored previous module)\n", new_mode);
+            printf("SWIPE UP: Settings -> %d (restored previous module)\n", new_mode);
             break;
             
         default:
@@ -408,10 +408,10 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
         
         esp_err_t ret = ui_state_request_transition(target_state, 5000); // 5秒超时
         if (ret == ESP_OK) {
-            printf("✅ SWIPE: UI transition requested to state %d\n", target_state);
+            printf("SWIPE: UI transition requested to state %d\n", target_state);
             return true;
         }
-        printf("❌ SWIPE: UI transition failed: %s\n", esp_err_to_name(ret));
+        printf("SWIPE: UI transition failed: %s\n", esp_err_to_name(ret));
         return false;
     }
     return true;
@@ -512,7 +512,7 @@ static void on_ui_state_changed(ui_state_t old_state, ui_state_t new_state) {
         old_mode != DISPLAY_MODE_SETTINGS &&
         (old_mode == DISPLAY_MODE_ANGLE || old_mode == DISPLAY_MODE_LEVEL || old_mode == DISPLAY_MODE_LASER)) {
         previous_main_mode = old_mode;
-        printf("🔄 SAVED previous main mode: %d before entering Settings\n", previous_main_mode);
+        printf("SAVED previous main mode: %d before entering Settings\n", previous_main_mode);
     }
     
     mode_switching = false;  // 重置切换标志
@@ -541,7 +541,7 @@ static void display_mode_touch_handler(uint16_t x, uint16_t y) {
 
 // 深度休眠处理函数
 static void deep_sleep_handler(void) {
-    printf("🌙 DEEP SLEEP: Preparing for deep sleep with countdown...\n");
+    printf("DEEP SLEEP: Preparing for deep sleep with countdown...\n");
 
     idle_sleep_stop();
     
@@ -551,13 +551,13 @@ static void deep_sleep_handler(void) {
     // 倒计时3秒，但每个数字显示时间缩短50% (0.5秒每个数字，总共1.5秒)
     for (int i = 3; i > 0; i--) {
         countdown_update_display(i);
-        printf("🌙 COUNTDOWN: %d seconds remaining\n", i);
+        printf("COUNTDOWN: %d seconds remaining\n", i);
         vTaskDelay(pdMS_TO_TICKS(500));  // 等待0.5秒 (缩短50%)
         
         // 在倒计时期间检查是否取消（通过触摸释放）
         uint16_t raw_x, raw_y;
         if (!getTouch(&raw_x, &raw_y)) {
-            printf("🌙 COUNTDOWN: Cancelled - touch released during countdown\n");
+            printf("COUNTDOWN: Cancelled - touch released during countdown\n");
             countdown_screen_hide();
             return;  // 取消深睡眠
         }
@@ -567,19 +567,19 @@ static void deep_sleep_handler(void) {
     // 这样屏幕会保持倒计时状态，避免露出底层UI
     
     // 关闭屏幕背光 - 使用专门的关闭函数避免触发NVS保存
-    printf("🌙 DEEP SLEEP: Turning off display...\n");
+    printf("DEEP SLEEP: Turning off display...\n");
     shutdownDisplay();
     
     // 延迟确保屏幕关闭和所有清理操作完成
     vTaskDelay(pdMS_TO_TICKS(200));
     
-    printf("🌙 DEEP SLEEP: Using RESET button wake-up strategy\n");
-    printf("🌙 DEEP SLEEP: No automatic wake-up timer - stable deep sleep mode\n");
-    printf("🌙 DEEP SLEEP: To wake up: Press RESET button to restart the device\n");
-    printf("🌙 DEEP SLEEP: This avoids GPIO0 conflicts and ensures maximum power saving\n");
+    printf("DEEP SLEEP: Using RESET button wake-up strategy\n");
+    printf("DEEP SLEEP: No automatic wake-up timer - stable deep sleep mode\n");
+    printf("DEEP SLEEP: To wake up: Press RESET button to restart the device\n");
+    printf("DEEP SLEEP: This avoids GPIO0 conflicts and ensures maximum power saving\n");
     
     // 进入深度休眠 - 不配置任何唤醒源，确保最稳定的深度睡眠
-    printf("🌙 DEEP SLEEP: Entering deep sleep mode...\n");
+    printf("DEEP SLEEP: Entering deep sleep mode...\n");
     
     // 确保所有输出都被刷新
     fflush(stdout);
@@ -731,7 +731,7 @@ static void touch_monitor_task(void *arg) {
                     long_press_start_time = current_time;
                     long_press_start_x = screen_x;
                     long_press_start_y = screen_y;
-                    printf("🌙 LONG PRESS: Started at (%d,%d), need %dms\n", 
+                    printf("LONG PRESS: Started at (%d,%d), need %dms\n", 
                            screen_x, screen_y, LONG_PRESS_DURATION_MS);
                 } else {
                     // 检查是否仍在同一区域（允许小范围移动）
@@ -743,27 +743,27 @@ static void touch_monitor_task(void *arg) {
                     if (dx <= 20 && dy <= 20) { // 允许20像素范围内的移动
                         uint32_t elapsed = current_time - long_press_start_time;
                         if (elapsed >= LONG_PRESS_DURATION_MS) {
-                            printf("🌙 LONG PRESS: %dms completed! Entering deep sleep...\n",
+                            printf("LONG PRESS: %dms completed! Entering deep sleep...\n",
                                    LONG_PRESS_DURATION_MS);
                             deep_sleep_handler();
                             // 不会执行到这里，因为设备已经进入深度休眠
                         } else {
                             // 显示进度（每500ms打印一次）
                             if (elapsed % 500 == 0) {
-                                printf("🌙 LONG PRESS: Progress %dms / %dms\n", 
+                                printf("LONG PRESS: Progress %dms / %dms\n", 
                                        (int)elapsed, LONG_PRESS_DURATION_MS);
                             }
                         }
                     } else {
                         // 移动超出范围，取消长按
-                        printf("🌙 LONG PRESS: Cancelled due to movement (dx=%d, dy=%d)\n", dx, dy);
+                        printf("LONG PRESS: Cancelled due to movement (dx=%d, dy=%d)\n", dx, dy);
                         long_press_active = false;
                     }
                 }
                 
                 // 在深度休眠区域时取消滑动检测
                 if (swipe_active) {
-                    printf("🚀 SWIPE: Cancelled - in sleep area\n");
+                    printf("SWIPE: Cancelled - in sleep area\n");
                     if (ui_state_get_current() == UI_STATE_SETTINGS && !settings_close_pending) {
                         settings_sheet_apply_offset(0);
                     }
@@ -772,7 +772,7 @@ static void touch_monitor_task(void *arg) {
             } else {
                 // 不在深度休眠区域，取消长按并处理滑动检测
                 if (long_press_active) {
-                    printf("🌙 LONG PRESS: Cancelled - moved outside sleep area\n");
+                    printf("LONG PRESS: Cancelled - moved outside sleep area\n");
                     long_press_active = false;
                 }
                 
@@ -818,7 +818,7 @@ static void touch_monitor_task(void *arg) {
         } else {
             // 没有触摸，检查是否需要结束滑动或长按
             if (long_press_active) {
-                printf("🌙 LONG PRESS: Cancelled - touch released\n");
+                printf("LONG PRESS: Cancelled - touch released\n");
                 long_press_active = false;
             }
             
@@ -831,18 +831,18 @@ static void touch_monitor_task(void *arg) {
                 if (settings_open_preview) {
                     if (release_dy >= SWIPE_OPEN_COMMIT_PX ||
                         settings_drag_offset > -(EXAMPLE_LCD_V_RES * 3 / 4)) {
-                        printf("🚀 SWIPE: Open preview committed (dy=%d, offset=%d)\n",
+                        printf("SWIPE: Open preview committed (dy=%d, offset=%d)\n",
                                release_dy, settings_drag_offset);
                         settings_sheet_apply_offset(0);
                         if (handle_swipe_switch(SWIPE_DOWN)) {
                             settings_open_preview = false;
                         } else {
                             // 状态切换失败：回收预览，避免菜单卡在主界面之上
-                            printf("❌ SWIPE: Open commit failed, cancelling preview\n");
+                            printf("SWIPE: Open commit failed, cancelling preview\n");
                             settings_sheet_cancel_preview();
                         }
                     } else {
-                        printf("🚀 SWIPE: Open preview cancelled (dy=%d, offset=%d)\n",
+                        printf("SWIPE: Open preview cancelled (dy=%d, offset=%d)\n",
                                release_dy, settings_drag_offset);
                         settings_sheet_cancel_preview();
                     }
@@ -851,7 +851,7 @@ static void touch_monitor_task(void *arg) {
                     bool allow_up_swipe = (ui_state_get_current() == UI_STATE_SETTINGS) &&
                                          bottom_touch_hint_active &&
                                          !settings_ammo_page_is_open();
-                    printf("🔍 SWIPE DEBUG: UI_STATE=%d, bottom_hint_active=%d, allow_up_swipe=%d\n", 
+                    printf("SWIPE DEBUG: UI_STATE=%d, bottom_hint_active=%d, allow_up_swipe=%d\n", 
                            ui_state_get_current(), bottom_touch_hint_active, allow_up_swipe);
                     
                     swipe_direction_t direction = detect_swipe(swipe_start_x, swipe_start_y, 
@@ -864,7 +864,7 @@ static void touch_monitor_task(void *arg) {
                     }
                     
                     if (direction != SWIPE_NONE) {
-                        printf("🚀 SWIPE: Completed - processing direction %d\n", direction);
+                        printf("SWIPE: Completed - processing direction %d\n", direction);
                         if (direction == SWIPE_UP) {
                             // 保持当前偏移，避免先弹回展开再关闭
                             settings_close_pending = true;

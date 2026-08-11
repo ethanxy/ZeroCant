@@ -722,7 +722,7 @@ unsigned char qmi8658_get_id(void)
 		{
 			// 临时注释掉校准功能，测试对水平仪精度的影响
 			// qmi8658_on_demand_cali();
-			qmi8658_log("qmi8658_get_id: Skipping on-demand calibration for testing\n");
+			qmi8658_log("qmi8658_get_id: Skipping on-demand calibration\n");
 
 			g_imu.cfg.ctrl8_value = 0xc0;
 			//QMI8658_INT1_ENABLE, QMI8658_INT2_ENABLE
