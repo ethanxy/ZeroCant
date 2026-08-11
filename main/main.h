@@ -21,6 +21,11 @@ void example_lvgl_unlock(void);
  */
 void shutdownDisplay(void);
 
+/**
+ * @brief Clear physical screen edge bands left by AMOLED pixel-shift
+ */
+void display_clear_burn_edges(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -516,6 +516,9 @@ static void on_ui_state_changed(ui_state_t old_state, ui_state_t new_state) {
     }
     
     mode_switching = false;  // 重置切换标志
+
+    /* Pixel-shift can leave stale edge pixels across UI teardown/rebuild. */
+    display_clear_burn_edges();
 }
 
 // 触摸事件处理器 (已弃用 - 改为滑动切换)

@@ -184,6 +184,65 @@ static bool example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, 
 static lv_color_t *s_burn_flush_scratch = NULL;
 static size_t s_burn_flush_scratch_px = 0;
 static volatile bool s_burn_need_invalidate = false;
+static esp_lcd_panel_handle_t s_panel_handle = NULL;
+static lv_color_t *s_burn_edge_clear = NULL;
+static size_t s_burn_edge_clear_px = 0;
+
+/** Clear physical screen margins left by pixel-shift (top/bottom/left/right). */
+void display_clear_burn_edges(void)
+{
+    if (!s_panel_handle) {
+        return;
+    }
+    const int edge = 4; /* > max burn offset (2) */
+    const size_t need = (size_t)EXAMPLE_LCD_H_RES * (size_t)edge;
+    if (!s_burn_edge_clear || s_burn_edge_clear_px < need) {
+        lv_color_t *fresh = (lv_color_t *)heap_caps_malloc(
+            need * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (!fresh) {
+            fresh = (lv_color_t *)heap_caps_malloc(
+                need * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+        }
+        if (!fresh) {
+            return;
+        }
+        if (s_burn_edge_clear) {
+            heap_caps_free(s_burn_edge_clear);
+        }
+        s_burn_edge_clear = fresh;
+        s_burn_edge_clear_px = need;
+    }
+    const lv_color_t black = lv_color_black();
+    for (size_t i = 0; i < need; i++) {
+        s_burn_edge_clear[i] = black;
+    }
+
+    /* top + bottom full-width bands */
+    esp_lcd_panel_draw_bitmap(s_panel_handle,
+                              0x14, 0,
+                              0x14 + EXAMPLE_LCD_H_RES, edge,
+                              s_burn_edge_clear);
+    esp_lcd_panel_draw_bitmap(s_panel_handle,
+                              0x14, EXAMPLE_LCD_V_RES - edge,
+                              0x14 + EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES,
+                              s_burn_edge_clear);
+
+    /* left + right strips */
+    for (int y = 0; y < EXAMPLE_LCD_V_RES; y += edge) {
+        int h = edge;
+        if (y + h > EXAMPLE_LCD_V_RES) {
+            h = EXAMPLE_LCD_V_RES - y;
+        }
+        esp_lcd_panel_draw_bitmap(s_panel_handle,
+                                  0x14, y,
+                                  0x14 + edge, y + h,
+                                  s_burn_edge_clear);
+        esp_lcd_panel_draw_bitmap(s_panel_handle,
+                                  0x14 + EXAMPLE_LCD_H_RES - edge, y,
+                                  0x14 + EXAMPLE_LCD_H_RES, y + h,
+                                  s_burn_edge_clear);
+    }
+}
 
 static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
 {
@@ -292,13 +351,19 @@ static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_
     }
 
     /*
-     * 右移后左侧会留旧像素；左移后右侧同理。
-     * 在同一块 DMA 缓冲里补黑边，再一次 draw，避免接缝残点。
+     * 右移后左侧会留旧像素；下移后顶部同理。
+     * 左右：每条 flush 都可从 x=0 补黑（条带通常全宽）。
+     * 上下：仅在刷顶部/底部条带时扩边，避免中间条带把上方 UI 涂黑。
      */
     int pad_left = 0;
     int pad_right = 0;
+    int pad_top = 0;
+    int pad_bottom = 0;
     int draw_x = dst_x;
+    int draw_y = dst_y;
     int draw_w = copy_w;
+    int draw_h = copy_h;
+
     if (burn_ox > 0 && dst_x > 0) {
         pad_left = dst_x;
         draw_x = 0;
@@ -311,6 +376,19 @@ static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_
             draw_w = copy_w + pad_right;
         }
     }
+    if (burn_oy > 0 && area->y1 == 0 && dst_y > 0) {
+        pad_top = dst_y;
+        draw_y = 0;
+        draw_h = dst_y + copy_h;
+    }
+    if (burn_oy < 0 && area->y2 >= (EXAMPLE_LCD_V_RES - 1)) {
+        int bottom_end = dst_y + copy_h;
+        if (bottom_end < EXAMPLE_LCD_V_RES) {
+            pad_bottom = EXAMPLE_LCD_V_RES - bottom_end;
+            draw_h = copy_h + pad_bottom;
+        }
+    }
+
     if (draw_w & 1) {
         if (draw_x + draw_w < EXAMPLE_LCD_H_RES) {
             draw_w++;
@@ -321,6 +399,19 @@ static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_
                 pad_right--;
             } else {
                 copy_w--;
+            }
+        }
+    }
+    if (draw_h & 1) {
+        if (draw_y + draw_h < EXAMPLE_LCD_V_RES) {
+            draw_h++;
+            pad_bottom++;
+        } else if (draw_h > 1) {
+            draw_h--;
+            if (pad_bottom > 0) {
+                pad_bottom--;
+            } else {
+                copy_h--;
             }
         }
     }
@@ -335,15 +426,28 @@ static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_
             draw_w--;
         }
     }
+    if ((draw_y & 1) && draw_y > 0) {
+        draw_y--;
+        pad_top++;
+        draw_h++;
+    } else if (draw_y & 1) {
+        draw_y++;
+        if (pad_top > 0) {
+            pad_top--;
+            draw_h--;
+        }
+    }
 
-    const bool need_pack = (pad_left > 0 || pad_right > 0 || src_x0 != 0 || src_y0 != 0 ||
-                            copy_w != src_w || copy_h != src_h || draw_w != copy_w);
+    const bool need_pack = (pad_left > 0 || pad_right > 0 || pad_top > 0 || pad_bottom > 0 ||
+                            src_x0 != 0 || src_y0 != 0 ||
+                            copy_w != src_w || copy_h != src_h ||
+                            draw_w != copy_w || draw_h != copy_h);
     const lv_color_t *blit_src = color_map;
 
     if (need_pack) {
-        size_t need_px = (size_t)draw_w * (size_t)copy_h;
+        size_t need_px = (size_t)draw_w * (size_t)draw_h;
         if (!s_burn_flush_scratch || s_burn_flush_scratch_px < need_px) {
-            size_t alloc_px = EXAMPLE_LCD_H_RES * EXAMPLE_LVGL_BUF_HEIGHT;
+            size_t alloc_px = EXAMPLE_LCD_H_RES * (EXAMPLE_LVGL_BUF_HEIGHT + 8);
             if (alloc_px < need_px) {
                 alloc_px = need_px;
             }
@@ -365,14 +469,22 @@ static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_
         }
 
         const lv_color_t black = lv_color_black();
-        for (int row = 0; row < copy_h; row++) {
+        for (int row = 0; row < draw_h; row++) {
             lv_color_t *dst_row = s_burn_flush_scratch + row * draw_w;
+            const bool in_content = (row >= pad_top) && (row < pad_top + copy_h);
+            if (!in_content) {
+                for (int col = 0; col < draw_w; col++) {
+                    dst_row[col] = black;
+                }
+                continue;
+            }
+            int src_row = row - pad_top;
             int col = 0;
             for (; col < pad_left; col++) {
                 dst_row[col] = black;
             }
             memcpy(dst_row + pad_left,
-                   color_map + (src_y0 + row) * src_w + src_x0,
+                   color_map + (src_y0 + src_row) * src_w + src_x0,
                    (size_t)copy_w * sizeof(lv_color_t));
             col = pad_left + copy_w;
             for (; col < draw_w; col++) {
@@ -384,9 +496,9 @@ static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_
 
     esp_lcd_panel_draw_bitmap(panel_handle,
                               draw_x + 0x14,
-                              dst_y,
+                              draw_y,
                               draw_x + 0x14 + draw_w,
-                              dst_y + copy_h,
+                              draw_y + draw_h,
                               blit_src);
 }
 
@@ -482,6 +594,7 @@ static void example_lvgl_port_task(void *arg)
         if (example_lvgl_lock(-1)) {
             if (s_burn_need_invalidate) {
                 s_burn_need_invalidate = false;
+                display_clear_burn_edges();
                 lv_obj_t *scr = lv_scr_act();
                 if (scr) {
                     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
@@ -673,6 +786,7 @@ void app_main(void)
     disp_drv.rounder_cb = example_lvgl_rounder_cb;
     disp_drv.draw_buf = &disp_buf;
     disp_drv.user_data = panel_handle;
+    s_panel_handle = panel_handle;
     lv_disp_t *disp = lv_disp_drv_register(&disp_drv);
 
     ESP_LOGI(TAG, "Install LVGL tick timer");
