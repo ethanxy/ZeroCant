@@ -27,6 +27,7 @@ void angle_calc_init(float sample_period, float beta) {
 }
 
 static float last_pitch = 0, last_roll = 0;
+static float last_gyro[3] = {0};
 // 低通滤波参数（可调，0.0~1.0，越大响应越快，建议0.2~0.5）
 static float pitch_lpf_alpha = 0.25f;
 static float roll_lpf_alpha = 0.3f;   // roll滤波系数，可以设置得稍微快一些
@@ -63,11 +64,20 @@ static void transform_coordinates(float acc[3], float gyro[3]) {
     gyro[2] = gy;    // 原Y角速度变为Z分量
 }
 
+void angle_calc_get_gyro(float *gx, float *gy, float *gz) {
+    if (gx) *gx = last_gyro[0];
+    if (gy) *gy = last_gyro[1];
+    if (gz) *gz = last_gyro[2];
+}
+
 void angle_calc_update(void) {
     float acc[3], gyro[3];
     qmi8658_read_xyz(acc, gyro);
     // 坐标系变换，确保pitch立起为0°、平放为90°
     transform_coordinates(acc, gyro);
+    last_gyro[0] = gyro[0];
+    last_gyro[1] = gyro[1];
+    last_gyro[2] = gyro[2];
     float ax = acc[0];
     float ay = acc[1];
     float az = acc[2];

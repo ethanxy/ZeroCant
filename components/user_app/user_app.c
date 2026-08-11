@@ -18,6 +18,7 @@
 #include "laser.h"  // 添加激光组件头文件
 #include "settings.h"  // 添加设置组件头文件
 #include "battery_protection.h"  // 添加电池保护组件
+#include "idle_sleep.h"
 
 // 外部函数声明
 extern void setBrightnes(uint8_t brig);  // LCD亮度控制函数
@@ -538,6 +539,8 @@ static void display_mode_touch_handler(uint16_t x, uint16_t y) {
 // 深度休眠处理函数
 static void deep_sleep_handler(void) {
     printf("🌙 DEEP SLEEP: Preparing for deep sleep with countdown...\n");
+
+    idle_sleep_stop();
     
     // 显示倒计时屏幕
     countdown_screen_show();
@@ -584,17 +587,14 @@ static void deep_sleep_handler(void) {
 
 // 电池保护关机前的回调函数
 static void battery_protection_shutdown_callback(void) {
-    ESP_LOGW("user_app", "🔋 BATTERY PROTECTION: Shutdown callback triggered");
-    
-    // 停止所有任务和定时器
-    printf("🔋 BATTERY PROTECTION: Stopping all tasks and timers...\n");
-    
-    // 停止AMOLED防烧屏保护
-    extern esp_err_t amoled_burn_protection_stop(void);
+    ESP_LOGW("user_app", "Battery protection: shutdown cleanup");
+    idle_sleep_stop();
     amoled_burn_protection_stop();
-    
-    // 其他清理工作...
-    printf("🔋 BATTERY PROTECTION: Cleanup completed\n");
+}
+
+static void idle_sleep_shutdown_callback(void) {
+    ESP_LOGW("user_app", "Idle sleep: shutdown cleanup");
+    amoled_burn_protection_stop();
 }
 
 static void angle_update_task(void *arg) {
@@ -615,6 +615,11 @@ static void angle_update_task(void *arg) {
         
         angle_calc_update();
         angle_calc_get(&pitch, &roll, &yaw);
+        {
+            float gx = 0, gy = 0, gz = 0;
+            angle_calc_get_gyro(&gx, &gy, &gz);
+            idle_sleep_feed_gyro(gx, gy, gz);
+        }
         
         // 根据当前显示模式更新相应的显示
         if (!mode_switching) { // 只在非切换状态下更新显示
@@ -695,6 +700,7 @@ static void touch_monitor_task(void *arg) {
         }
         
         if (touch_detected) {
+            idle_sleep_on_activity();
             // 转换触摸坐标到屏幕坐标系
             transform_touch_coordinates(raw_x, raw_y, &screen_x, &screen_y);
             
@@ -979,6 +985,17 @@ void user_top_init(void)
   } else {
       ESP_LOGI("user_app", "UI state callback registered successfully");
   }
+
+  /* Init only; start after UI lock path in main. */
+  esp_err_t bat_ret = battery_protection_init(battery_protection_shutdown_callback);
+  if (bat_ret != ESP_OK) {
+      ESP_LOGE("user_app", "Battery protection init failed: %s", esp_err_to_name(bat_ret));
+  }
+
+  esp_err_t idle_ret = idle_sleep_init(idle_sleep_shutdown_callback);
+  if (idle_ret != ESP_OK) {
+      ESP_LOGE("user_app", "Idle sleep init failed: %s", esp_err_to_name(idle_ret));
+  }
   
   // 将传感器初始化移到后台任务，避免阻塞UI显示
   xTaskCreate(sensor_init_task, "sensor_init", 8192, NULL, 4, NULL); // 优先级4，适中
@@ -997,20 +1014,6 @@ void user_gui_screen(lv_ui *ui)
 }
 void user_app_init(lv_ui *ui)
 {
-  // 初始化电池保护功能
-  esp_err_t ret = battery_protection_init(battery_protection_shutdown_callback);
-  if (ret == ESP_OK) {
-    // 启动电池保护监控
-    ret = battery_protection_start();
-    if (ret == ESP_OK) {
-      ESP_LOGI("user_app", "🔋 Battery protection started successfully");
-    } else {
-      ESP_LOGE("user_app", "🔋 Failed to start battery protection: %s", esp_err_to_name(ret));
-    }
-  } else {
-    ESP_LOGE("user_app", "🔋 Failed to initialize battery protection: %s", esp_err_to_name(ret));
-  }
-
   xTaskCreate(example_app_task, "example_app_task", 4096, (void *)ui, 2, NULL); // 增加栈大小避免溢出
   xTaskCreate(esp_wifi_scan_w, "esp_wifi_scan_w", 4096, ui, 2, &pxWifiTask); // 增加栈大小
   xTaskCreate(esp_ble_scan_w, "esp_ble_scan_w", 4096, ui, 2, &pxBleTask); // 增加栈大小

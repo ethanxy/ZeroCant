@@ -9,6 +9,7 @@
 #include "ballistic_calc.h"
 #include "ballistic_profile.h"
 #include "angle_calc.h"
+#include "idle_sleep.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -447,6 +448,8 @@ esp_err_t laser_measure(float *distance_mm, uint32_t timeout_ms) {
         ESP_LOGE(TAG, "Distance pointer is NULL");
         return ESP_ERR_INVALID_ARG;
     }
+
+    idle_sleep_on_activity();
     
     ESP_LOGI(TAG, "Starting laser measurement...");
     
@@ -561,6 +564,8 @@ void laser_start_measurement(void) {
         ESP_LOGW(TAG, "Measurement already in progress, ignoring request");
         return;
     }
+
+    idle_sleep_on_activity();
     
     ESP_LOGI(TAG, "Starting single-click measurement");
     

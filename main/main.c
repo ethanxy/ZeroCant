@@ -26,6 +26,8 @@
 #include "memory_diag.h" // 添加内存诊断工具
 #include "amoled_burn_protection.h" // 添加AMOLED防烧屏保护
 #include "adc_bsp.h" // 添加ADC BSP功能
+#include "battery_protection.h"
+#include "idle_sleep.h"
 #include "ui_state_manager.h" // 添加UI状态管理器
 #include "angle_display.h" // 角度显示组件
 #include "level_display.h" // 水平仪显示组件
@@ -732,10 +734,9 @@ void app_main(void)
         user_top_init();
         ESP_LOGI(TAG, "[user_top_init] call end");
         
-        // 在UI初始化完成后再初始化ADC，提升启动速度
         ESP_LOGI(TAG, "Initializing ADC for battery voltage monitoring (post-UI)");
         adc_bsp_init();
-        
+
         // 初始化激光测距硬件
         ESP_LOGI(TAG, "Initializing laser hardware...");
         esp_err_t laser_ret = laser_hardware_init();
@@ -764,6 +765,21 @@ void app_main(void)
         } else {
             ESP_LOGE(TAG, "Failed to init AMOLED burn protection: %s",
                      esp_err_to_name(burn_ret));
+        }
+
+        /* Start while LVGL lock held (creates lv_timer). */
+        esp_err_t bat_ret = battery_protection_start();
+        if (bat_ret == ESP_OK) {
+            ESP_LOGI(TAG, "Battery protection started");
+        } else {
+            ESP_LOGE(TAG, "Battery protection start failed: %s", esp_err_to_name(bat_ret));
+        }
+
+        esp_err_t idle_ret = idle_sleep_start();
+        if (idle_ret == ESP_OK) {
+            ESP_LOGI(TAG, "Idle sleep started (gyro + touch, 10 min)");
+        } else {
+            ESP_LOGE(TAG, "Idle sleep start failed: %s", esp_err_to_name(idle_ret));
         }
         
         //lv_demo_widgets();      /* A widgets example */
