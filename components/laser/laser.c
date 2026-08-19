@@ -18,6 +18,8 @@ static const char* TAG = "laser";
 
 static lv_obj_t *laser_screen = NULL;
 static lv_obj_t *status_label = NULL;
+static lv_obj_t *distance_label = NULL;
+static lv_obj_t *detail_label = NULL;
 static lv_obj_t *measure_btn = NULL;  // 新增：测量按钮
 static lv_obj_t *hold_guide = NULL;   // Hold 左右方向引导
 static lv_obj_t *hold_hint_left = NULL;
@@ -28,9 +30,27 @@ static int screen_width = 240;
 static int screen_height = 240;
 
 #define HOLD_DEADBAND_MIL   0.05f
-#define HOLD_SIDE_SIZE      56
+#define HOLD_SIDE_SIZE      60
 #define HOLD_COLOR_ACTIVE   0x3DFF9A
 #define HOLD_COLOR_IDLE     0x555555
+#define HOLD_GUIDE_HEIGHT   118
+
+#define LASER_FONT_IDLE       &lv_font_montserrat_24
+#define LASER_FONT_PROGRESS   &lv_font_montserrat_20
+#define LASER_FONT_STATUS     &lv_font_montserrat_16
+#define LASER_FONT_BTN        &lv_font_montserrat_16
+#define LASER_FONT_HOLD_VAL   &lv_font_montserrat_48
+#define LASER_FONT_HOLD_HINT  &lv_font_montserrat_24
+#define LASER_FONT_HOLD_META  &lv_font_montserrat_14
+#define LASER_FONT_DISTANCE   &lv_font_montserrat_48
+
+#define LASER_IDLE_CENTER_Y   -48
+#define LASER_DISTANCE_TOP_Y  28
+#define LASER_DETAIL_TOP_Y    92
+
+static void laser_ui_status_apply_style(const char *text);
+static void laser_ui_result_hide(void);
+static void laser_ui_show_measurement_result(float distance_m, const char *detail_text);
 
 static void laser_ui_hold_guide_hide(void);
 static void laser_ui_hold_guide_show(float hold_mil, bool valid);
@@ -160,8 +180,8 @@ static void laser_ui_hold_guide_show(float hold_mil, bool valid)
 static void laser_ui_hold_guide_create(void)
 {
     hold_guide = lv_obj_create(laser_screen);
-    lv_obj_set_size(hold_guide, screen_width - 16, 88);
-    lv_obj_align(hold_guide, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_set_size(hold_guide, screen_width - 16, HOLD_GUIDE_HEIGHT);
+    lv_obj_align(hold_guide, LV_ALIGN_CENTER, 0, -8);
     lv_obj_set_style_bg_opa(hold_guide, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(hold_guide, 0, 0);
     lv_obj_set_style_pad_all(hold_guide, 0, 0);
@@ -179,7 +199,7 @@ static void laser_ui_hold_guide_create(void)
 
     hold_hint_left = lv_label_create(left_box);
     lv_label_set_text(hold_hint_left, LV_SYMBOL_UP "\nUP");
-    lv_obj_set_style_text_font(hold_hint_left, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(hold_hint_left, LASER_FONT_HOLD_HINT, 0);
     lv_obj_set_style_text_align(hold_hint_left, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_line_space(hold_hint_left, -4, 0);
     style_hold_side(hold_hint_left, false);
@@ -188,21 +208,21 @@ static void laser_ui_hold_guide_create(void)
     /* 中间：Hold 数值 */
     lv_obj_t *hold_caption = lv_label_create(hold_guide);
     lv_label_set_text(hold_caption, "HOLD");
-    lv_obj_set_style_text_font(hold_caption, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(hold_caption, LASER_FONT_HOLD_META, 0);
     lv_obj_set_style_text_color(hold_caption, lv_color_hex(0x888888), 0);
-    lv_obj_align(hold_caption, LV_ALIGN_CENTER, 0, -28);
+    lv_obj_align(hold_caption, LV_ALIGN_CENTER, 0, -42);
 
     hold_value_label = lv_label_create(hold_guide);
     lv_label_set_text(hold_value_label, "0.00");
-    lv_obj_set_style_text_font(hold_value_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(hold_value_label, LASER_FONT_HOLD_VAL, 0);
     lv_obj_set_style_text_color(hold_value_label, lv_color_white(), 0);
-    lv_obj_align(hold_value_label, LV_ALIGN_CENTER, 0, -4);
+    lv_obj_align(hold_value_label, LV_ALIGN_CENTER, 0, 0);
 
     hold_unit_label = lv_label_create(hold_guide);
     lv_label_set_text(hold_unit_label, "mil");
-    lv_obj_set_style_text_font(hold_unit_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(hold_unit_label, LASER_FONT_HOLD_META, 0);
     lv_obj_set_style_text_color(hold_unit_label, lv_color_hex(0xAAAAAA), 0);
-    lv_obj_align(hold_unit_label, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_align(hold_unit_label, LV_ALIGN_CENTER, 0, 36);
 
     /* 右侧：大号 ↓ / DN */
     lv_obj_t *right_box = lv_obj_create(hold_guide);
@@ -215,11 +235,76 @@ static void laser_ui_hold_guide_create(void)
 
     hold_hint_right = lv_label_create(right_box);
     lv_label_set_text(hold_hint_right, LV_SYMBOL_DOWN "\nDN");
-    lv_obj_set_style_text_font(hold_hint_right, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(hold_hint_right, LASER_FONT_HOLD_HINT, 0);
     lv_obj_set_style_text_align(hold_hint_right, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_line_space(hold_hint_right, -4, 0);
     style_hold_side(hold_hint_right, false);
     lv_obj_center(hold_hint_right);
+}
+
+static bool laser_ui_status_is_idle(const char *text)
+{
+    return text && (strcmp(text, "Ready to measure") == 0 ||
+                    strcmp(text, "Ready to\nmeasure") == 0);
+}
+
+static bool laser_ui_status_is_progress(const char *text)
+{
+    return text && (strcmp(text, "Powering device...") == 0 ||
+                    strcmp(text, "Measuring distance...") == 0);
+}
+
+static void laser_ui_status_apply_style(const char *text)
+{
+    if (!status_label || !lv_obj_is_valid(status_label)) {
+        return;
+    }
+
+    if (laser_ui_status_is_idle(text)) {
+        lv_obj_set_style_text_font(status_label, LASER_FONT_IDLE, 0);
+        lv_obj_set_style_text_line_space(status_label, 6, 0);
+        lv_obj_align(status_label, LV_ALIGN_CENTER, 0, LASER_IDLE_CENTER_Y);
+    } else if (laser_ui_status_is_progress(text)) {
+        lv_obj_set_style_text_font(status_label, LASER_FONT_PROGRESS, 0);
+        lv_obj_set_style_text_line_space(status_label, 4, 0);
+        lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 32);
+    } else {
+        lv_obj_set_style_text_font(status_label, LASER_FONT_STATUS, 0);
+        lv_obj_set_style_text_line_space(status_label, 4, 0);
+        lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 28);
+    }
+}
+
+static void laser_ui_result_hide(void)
+{
+    if (distance_label && lv_obj_is_valid(distance_label)) {
+        lv_obj_add_flag(distance_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (detail_label && lv_obj_is_valid(detail_label)) {
+        lv_obj_add_flag(detail_label, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void laser_ui_show_measurement_result(float distance_m, const char *detail_text)
+{
+    laser_ui_result_hide();
+
+    if (status_label && lv_obj_is_valid(status_label)) {
+        lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (!distance_label || !detail_label) {
+        return;
+    }
+
+    char dist_buf[24];
+    snprintf(dist_buf, sizeof(dist_buf), "%.2f m", distance_m);
+    lv_label_set_text(distance_label, dist_buf);
+    lv_label_set_text(detail_label, detail_text ? detail_text : "");
+    lv_obj_clear_flag(distance_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(detail_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(distance_label);
+    lv_obj_move_foreground(detail_label);
 }
 
 void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
@@ -229,7 +314,7 @@ void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     printf("laser_ui_init: initializing %dx%d laser UI\n", screen_width, screen_height);
     
     // 强制清理任何已存在的激光UI对象
-    if (laser_screen || status_label || measure_btn || hold_guide) {
+    if (laser_screen || status_label || distance_label || detail_label || measure_btn || hold_guide) {
         printf("laser_ui_init: Forcing cleanup of existing UI objects\n");
         laser_ui_cleanup();
     }
@@ -258,13 +343,32 @@ void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
         printf("laser_ui_init: Failed to create status_label!\n");
         return;
     }
-    lv_label_set_text(status_label, "Ready to measure");
+    lv_label_set_text(status_label, "Ready to\nmeasure");
     lv_obj_set_style_text_color(status_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, 0);
     lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(status_label, screen_width - 36);
-    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 28);
+    lv_obj_set_width(status_label, screen_width - 32);
     lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
+    laser_ui_status_apply_style("Ready to\nmeasure");
+
+    distance_label = lv_label_create(laser_screen);
+    lv_label_set_text(distance_label, "0.00 m");
+    lv_obj_set_style_text_color(distance_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(distance_label, LASER_FONT_DISTANCE, 0);
+    lv_obj_set_width(distance_label, screen_width - 32);
+    lv_obj_set_style_text_align(distance_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(distance_label, LV_ALIGN_TOP_MID, 0, LASER_DISTANCE_TOP_Y);
+    lv_obj_add_flag(distance_label, LV_OBJ_FLAG_HIDDEN);
+
+    detail_label = lv_label_create(laser_screen);
+    lv_label_set_text(detail_label, "");
+    lv_obj_set_style_text_color(detail_label, lv_color_hex(0xCCCCCC), 0);
+    lv_obj_set_style_text_font(detail_label, LASER_FONT_STATUS, 0);
+    lv_obj_set_style_text_line_space(detail_label, 4, 0);
+    lv_label_set_long_mode(detail_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(detail_label, screen_width - 32);
+    lv_obj_set_style_text_align(detail_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(detail_label, LV_ALIGN_TOP_MID, 0, LASER_DETAIL_TOP_Y);
+    lv_obj_add_flag(detail_label, LV_OBJ_FLAG_HIDDEN);
 
     laser_ui_hold_guide_create();
     
@@ -274,7 +378,7 @@ void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
         printf("laser_ui_init: Failed to create measure_btn!\n");
         return;
     }
-    lv_obj_set_size(measure_btn, 200, 64);
+    lv_obj_set_size(measure_btn, 220, 68);
     lv_obj_align(measure_btn, LV_ALIGN_BOTTOM_MID, 0, -18);
     lv_obj_set_ext_click_area(measure_btn, 24);
     /* 手指轻微滑动时仍锁定在按钮上，避免取消 CLICKED */
@@ -294,7 +398,7 @@ void laser_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     lv_obj_t *btn_label = lv_label_create(measure_btn);
     lv_label_set_text(btn_label, "MEASURE");
     lv_obj_set_style_text_color(btn_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(btn_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(btn_label, LASER_FONT_BTN, 0);
     lv_obj_center(btn_label);
     
     printf("laser_ui_init: completed successfully\n");
@@ -311,7 +415,10 @@ void laser_ui_set_status_text(const char *text) {
         return;
     }
     
+    laser_ui_result_hide();
+    lv_obj_clear_flag(status_label, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(status_label, text);
+    laser_ui_status_apply_style(text);
 }
 
 esp_err_t laser_hardware_init(void) {
@@ -614,26 +721,19 @@ void laser_start_measurement(void) {
         ballistic_output_t bal_out = {0};
         esp_err_t bal_ret = ballistic_solve_holdover(&bal_in, &bal_out);
 
-        char distance_text[160];
+        char detail_text[128];
         if (bal_ret == ESP_OK && bal_out.valid) {
-            snprintf(distance_text, sizeof(distance_text),
-                     "Distance: %.2f m\n"
-                     "Drop: %.1f in (%.0f mm)\n"
-                     "%s",
-                     distance_m,
+            snprintf(detail_text, sizeof(detail_text),
+                     "Drop: %.1f in (%.0f mm)\n%s",
                      bal_out.drop_in,
                      bal_out.drop_m * 1000.0f,
                      ballistic_profile_name());
             laser_ui_hold_guide_show(bal_out.hold_mil, true);
         } else {
-            snprintf(distance_text, sizeof(distance_text),
-                     "Distance: %.2f m\n"
-                     "%s",
-                     distance_m,
-                     ballistic_profile_name());
+            snprintf(detail_text, sizeof(detail_text), "%s", ballistic_profile_name());
             laser_ui_hold_guide_show(0.0f, false);
         }
-        laser_ui_set_status_text(distance_text);
+        laser_ui_show_measurement_result(distance_m, detail_text);
         measurement_result_displayed = true;
 
         ESP_LOGI(TAG, "Measurement successful: %.2f mm look=%.1f° bal=%s",
@@ -789,6 +889,16 @@ void laser_ui_cleanup(void) {
     if (status_label && lv_obj_is_valid(status_label)) {
         lv_obj_del(status_label);
         status_label = NULL;
+    }
+
+    if (distance_label && lv_obj_is_valid(distance_label)) {
+        lv_obj_del(distance_label);
+        distance_label = NULL;
+    }
+
+    if (detail_label && lv_obj_is_valid(detail_label)) {
+        lv_obj_del(detail_label);
+        detail_label = NULL;
     }
 
     /* hold_guide 及其子对象随 laser_screen 一并删除 */

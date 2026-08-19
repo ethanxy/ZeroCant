@@ -7,12 +7,16 @@
 #include <stdio.h>
 
 static lv_obj_t *angle_disp_canvas = NULL;
-static lv_obj_t *angle_label = NULL;
+static lv_obj_t *bottom_row = NULL;
+static lv_obj_t *pitch_label = NULL;
+static lv_obj_t *roll_label = NULL;
+static lv_obj_t *roll_arrow_label = NULL;
 static int disp_width = 240;
 static int disp_height = 240;
 #define MAX_PITCH 45.0f
 #define DIAMOND_AREA_HEIGHT 40  // 正方形区域高度保护，调整为40px以匹配新位置
 #define BOTTOM_LABEL_AREA_HEIGHT 40  // 底部标签区域高度保护，与ruler_bottom保持一致
+#define ROLL_LEVEL_DEADBAND_DEG 0.4f
 
 static lv_color_t *cbuf = NULL;
 static lv_color_t *ruler_bg_buf = NULL;
@@ -22,6 +26,68 @@ static bool ruler_cached = false; // 添加缓存状态标志
 static int last_line_x0 = -1, last_line_y0 = -1, last_line_x1 = -1, last_line_y1 = -1;
 static float last_filtered_pitch = 0.0f, last_filtered_roll = 0.0f;
 static bool first_update = true;
+
+static void angle_display_roll_arrow_update(float roll)
+{
+    if (!roll_arrow_label || !lv_obj_is_valid(roll_arrow_label)) {
+        return;
+    }
+
+    if (fabsf(roll) <= ROLL_LEVEL_DEADBAND_DEG) {
+        lv_obj_add_flag(roll_arrow_label, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    lv_label_set_text(roll_arrow_label, roll > 0.0f ? LV_SYMBOL_LEFT : LV_SYMBOL_RIGHT);
+    lv_obj_clear_flag(roll_arrow_label, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void angle_display_bottom_labels_set_color_mode(bool color_mode)
+{
+    if (!bottom_row || !pitch_label || !roll_label) {
+        return;
+    }
+
+    if (color_mode) {
+        lv_label_set_text(pitch_label, "颜色模式: 点击切换");
+        lv_obj_add_flag(roll_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(roll_arrow_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(roll_label, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void angle_display_bottom_labels_create(lv_obj_t *parent)
+{
+    bottom_row = lv_obj_create(parent);
+    lv_obj_set_size(bottom_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_align(bottom_row, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_opa(bottom_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(bottom_row, 0, 0);
+    lv_obj_set_style_pad_all(bottom_row, 0, 0);
+    lv_obj_set_style_pad_column(bottom_row, 8, 0);
+    lv_obj_set_flex_flow(bottom_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bottom_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(bottom_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    pitch_label = lv_label_create(bottom_row);
+    lv_label_set_text(pitch_label, "Pitch: 0.0°");
+    lv_obj_set_style_text_color(pitch_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(pitch_label, &lv_font_montserrat_16, 0);
+
+    roll_label = lv_label_create(bottom_row);
+    lv_label_set_text(roll_label, "Roll: 0.0°");
+    lv_obj_set_style_text_color(roll_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(roll_label, &lv_font_montserrat_16, 0);
+
+    roll_arrow_label = lv_label_create(bottom_row);
+    lv_label_set_text(roll_arrow_label, "");
+    lv_obj_set_style_text_color(roll_arrow_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(roll_arrow_label, &lv_font_montserrat_16, 0);
+    lv_obj_add_flag(roll_arrow_label, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_move_foreground(bottom_row);
+}
 
 // 防抖动阈值（像素）
 #define PIXEL_JITTER_THRESHOLD 2
@@ -226,17 +292,20 @@ void angle_display_init(lv_obj_t *parent, int screen_width, int screen_height) {
         lv_obj_del(angle_disp_canvas);
         angle_disp_canvas = NULL;
     }
+    if(bottom_row) {
+        lv_obj_del(bottom_row);
+        bottom_row = NULL;
+        pitch_label = NULL;
+        roll_label = NULL;
+        roll_arrow_label = NULL;
+    }
     if(cbuf) {
-        heap_caps_free(cbuf);  // 修复：使用正确的释放函数
+        heap_caps_free(cbuf);
         cbuf = NULL;
     }
     if(ruler_bg_buf) {
-        heap_caps_free(ruler_bg_buf);  // 修复：使用正确的释放函数
+        heap_caps_free(ruler_bg_buf);
         ruler_bg_buf = NULL;
-    }
-    if(angle_label) {
-        lv_obj_del(angle_label);
-        angle_label = NULL;
     }
     ruler_cached = false;
     
@@ -332,16 +401,10 @@ void angle_display_init(lv_obj_t *parent, int screen_width, int screen_height) {
     // 注册事件回调
     lv_obj_add_event_cb(angle_disp_canvas, angle_disp_canvas_event_cb, LV_EVENT_CLICKED, NULL);
     
-    // 创建底部角度显示label (移除安全间距，贴底显示，放大字体)
-    angle_label = lv_label_create(parent);
-    assert(angle_label);
-    lv_obj_set_style_text_color(angle_label, lv_color_white(), 0);
-    // 使用16号字体以适配增加的8px空间 (从默认14号放大到16号)
-    lv_obj_set_style_text_font(angle_label, &lv_font_montserrat_16, 0);
-    lv_obj_align(angle_label, LV_ALIGN_BOTTOM_MID, 0, 0);
+    // 创建底部角度显示（Pitch / Roll + 水平修正箭头）
+    angle_display_bottom_labels_create(parent);
     
-    // 设置初始文本，避免显示默认的"TEXT"占位符
-    lv_label_set_text(angle_label, "Pitch: 0.0°  Roll: 0.0°");
+    printf("angle_display_init: completed successfully\n");
 }
 
 void angle_display_update(float pitch, float roll) {
@@ -380,8 +443,8 @@ void angle_display_update(float pitch, float roll) {
         } else {
             lv_canvas_fill_bg(angle_disp_canvas, lv_color_hex(0xFF0000), LV_OPA_COVER);
         }
-        if(angle_label) {
-            lv_label_set_text(angle_label, "颜色模式: 点击切换");
+        if(pitch_label) {
+            angle_display_bottom_labels_set_color_mode(true);
         }
         lv_obj_invalidate(angle_disp_canvas);
         return;
@@ -548,18 +611,24 @@ void angle_display_update(float pitch, float roll) {
         first_update = false;
     }
     
+    angle_display_roll_arrow_update(roll);
+
     // 角度显示标签始终更新（但限制更新频率）
     static int label_update_counter = 0;
     if (++label_update_counter >= 5) { // 每5次更新一次标签
         label_update_counter = 0;
-        if(angle_label) {
-            char buf[64];
+        if (pitch_label && roll_label) {
+            char pitch_buf[40];
+            char roll_buf[24];
+            lv_obj_clear_flag(roll_label, LV_OBJ_FLAG_HIDDEN);
             if (ruler_cached) {
-                snprintf(buf, sizeof(buf), "Pitch: %.1f°  Roll: %.1f°", pitch, roll);
+                snprintf(pitch_buf, sizeof(pitch_buf), "Pitch: %.1f°", pitch);
             } else {
-                snprintf(buf, sizeof(buf), "Pitch: %.1f°  Roll: %.1f° [No Cache]", pitch, roll);
+                snprintf(pitch_buf, sizeof(pitch_buf), "Pitch: %.1f° [No Cache]", pitch);
             }
-            lv_label_set_text(angle_label, buf);
+            snprintf(roll_buf, sizeof(roll_buf), "Roll: %.1f°", roll);
+            lv_label_set_text(pitch_label, pitch_buf);
+            lv_label_set_text(roll_label, roll_buf);
         }
     }
 }
@@ -572,9 +641,12 @@ void angle_display_cleanup(void) {
         lv_obj_del(angle_disp_canvas);
         angle_disp_canvas = NULL;
     }
-    if (angle_label) {
-        lv_obj_del(angle_label);
-        angle_label = NULL;
+    if (bottom_row) {
+        lv_obj_del(bottom_row);
+        bottom_row = NULL;
+        pitch_label = NULL;
+        roll_label = NULL;
+        roll_arrow_label = NULL;
     }
     
     // 释放内存缓冲区
