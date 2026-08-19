@@ -4,6 +4,21 @@
 #include <stdio.h>
 #include <math.h>
 
+#define AMMO_FONT_TITLE      &lv_font_montserrat_24
+#define AMMO_FONT_HINT       &lv_font_montserrat_14
+#define AMMO_FONT_ROW        &lv_font_montserrat_16
+#define AMMO_FONT_BTN        &lv_font_montserrat_16
+
+#define AMMO_ROW_Y0          68
+#define AMMO_ROW_STEP        47
+#define AMMO_ROW_NAME_X      14
+#define AMMO_ROW_VALUE_X     84
+#define AMMO_BTN_H           38
+#define AMMO_BTN_SM_W        40
+#define AMMO_BTN_TOGGLE_W    84
+#define AMMO_BACK_W          200
+#define AMMO_BACK_H          48
+
 static lv_obj_t *ammo_page = NULL;
 static lv_obj_t *val_labels[6] = {0};
 static bool ammo_open = false;
@@ -129,13 +144,13 @@ static lv_obj_t *make_btn(lv_obj_t *parent, const char *txt, int w, int h) {
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(btn, lv_color_white(), 0);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_radius(btn, 4, 0);
-    lv_obj_set_ext_click_area(btn, 8);
+    lv_obj_set_style_radius(btn, 6, 0);
+    lv_obj_set_ext_click_area(btn, 10);
 
     lv_obj_t *lab = lv_label_create(btn);
     lv_label_set_text(lab, txt);
     lv_obj_set_style_text_color(lab, lv_color_white(), 0);
-    lv_obj_set_style_text_font(lab, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lab, AMMO_FONT_BTN, 0);
     lv_obj_center(lab);
     return btn;
 }
@@ -148,17 +163,17 @@ static void add_adjust_row(lv_obj_t *parent, int y, int row, const char *title,
     lv_obj_t *name = lv_label_create(parent);
     lv_label_set_text(name, title);
     lv_obj_set_style_text_color(name, lv_color_white(), 0);
-    lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
-    lv_obj_align(name, LV_ALIGN_TOP_LEFT, 12, y);
+    lv_obj_set_style_text_font(name, AMMO_FONT_ROW, 0);
+    lv_obj_align(name, LV_ALIGN_TOP_LEFT, AMMO_ROW_NAME_X, y + 8);
 
     val_labels[row] = lv_label_create(parent);
     lv_obj_set_style_text_color(val_labels[row], lv_color_hex(0xCCCCCC), 0);
-    lv_obj_set_style_text_font(val_labels[row], &lv_font_montserrat_14, 0);
-    lv_obj_align(val_labels[row], LV_ALIGN_TOP_LEFT, 70, y);
+    lv_obj_set_style_text_font(val_labels[row], AMMO_FONT_ROW, 0);
+    lv_obj_align(val_labels[row], LV_ALIGN_TOP_LEFT, AMMO_ROW_VALUE_X, y + 8);
 
     if (model_toggle) {
-        lv_obj_t *btn = make_btn(parent, "G1/G7", 72, 32);
-        lv_obj_align(btn, LV_ALIGN_TOP_RIGHT, -12, y - 6);
+        lv_obj_t *btn = make_btn(parent, "G1/G7", AMMO_BTN_TOGGLE_W, AMMO_BTN_H);
+        lv_obj_align(btn, LV_ALIGN_TOP_RIGHT, -12, y);
         if (s_adj_idx < (int)(sizeof(s_adj_store) / sizeof(s_adj_store[0]))) {
             s_adj_store[s_adj_idx].row = row;
             s_adj_store[s_adj_idx].delta = 0;
@@ -168,10 +183,10 @@ static void add_adjust_row(lv_obj_t *parent, int y, int row, const char *title,
         return;
     }
 
-    lv_obj_t *minus = make_btn(parent, "-", 36, 32);
-    lv_obj_align(minus, LV_ALIGN_TOP_RIGHT, -56, y - 6);
-    lv_obj_t *plus = make_btn(parent, "+", 36, 32);
-    lv_obj_align(plus, LV_ALIGN_TOP_RIGHT, -12, y - 6);
+    lv_obj_t *minus = make_btn(parent, "-", AMMO_BTN_SM_W, AMMO_BTN_H);
+    lv_obj_align(minus, LV_ALIGN_TOP_RIGHT, -60, y);
+    lv_obj_t *plus = make_btn(parent, "+", AMMO_BTN_SM_W, AMMO_BTN_H);
+    lv_obj_align(plus, LV_ALIGN_TOP_RIGHT, -12, y);
 
     if (s_adj_idx + 1 < (int)(sizeof(s_adj_store) / sizeof(s_adj_store[0]))) {
         s_adj_store[s_adj_idx].row = row;
@@ -205,28 +220,26 @@ void settings_ammo_page_create(lv_obj_t *parent, int screen_width, int screen_he
     lv_obj_t *title = lv_label_create(ammo_page);
     lv_label_set_text(title, "Ammo Setup");
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_set_style_text_font(title, AMMO_FONT_TITLE, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
 
     lv_obj_t *hint = lv_label_create(ammo_page);
     lv_label_set_text(hint, "Sight ~1.5in typical");
     lv_obj_set_style_text_color(hint, lv_color_hex(0x808080), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
-    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 44);
+    lv_obj_set_style_text_font(hint, AMMO_FONT_HINT, 0);
+    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 46);
 
-    int y0 = 78;
-    int step = 48;
-    add_adjust_row(ammo_page, y0 + 0 * step, ROW_GR, "Gr", -1.0f, 1.0f, false);
-    add_adjust_row(ammo_page, y0 + 1 * step, ROW_BC, "BC", -0.005f, 0.005f, false);
-    add_adjust_row(ammo_page, y0 + 2 * step, ROW_FPS, "FPS", -25.0f, 25.0f, false);
-    add_adjust_row(ammo_page, y0 + 3 * step, ROW_ZERO, "Zero", -5.0f, 5.0f, false);
-    add_adjust_row(ammo_page, y0 + 4 * step, ROW_SIGHT, "Sight", -0.1f, 0.1f, false);
-    add_adjust_row(ammo_page, y0 + 5 * step, ROW_MODEL, "Model", 0, 0, true);
+    add_adjust_row(ammo_page, AMMO_ROW_Y0 + 0 * AMMO_ROW_STEP, ROW_GR, "Gr", -1.0f, 1.0f, false);
+    add_adjust_row(ammo_page, AMMO_ROW_Y0 + 1 * AMMO_ROW_STEP, ROW_BC, "BC", -0.005f, 0.005f, false);
+    add_adjust_row(ammo_page, AMMO_ROW_Y0 + 2 * AMMO_ROW_STEP, ROW_FPS, "FPS", -25.0f, 25.0f, false);
+    add_adjust_row(ammo_page, AMMO_ROW_Y0 + 3 * AMMO_ROW_STEP, ROW_ZERO, "Zero", -5.0f, 5.0f, false);
+    add_adjust_row(ammo_page, AMMO_ROW_Y0 + 4 * AMMO_ROW_STEP, ROW_SIGHT, "Sight", -0.1f, 0.1f, false);
+    add_adjust_row(ammo_page, AMMO_ROW_Y0 + 5 * AMMO_ROW_STEP, ROW_MODEL, "Model", 0, 0, true);
 
-    /* Keep above the 48px settings close-swipe zone at the bottom */
-    lv_obj_t *back = make_btn(ammo_page, "Back / Save", 176, 42);
-    lv_obj_set_ext_click_area(back, 12);
-    lv_obj_align(back, LV_ALIGN_BOTTOM_MID, 0, -64);
+    /* Keep above the settings close-swipe zone at the bottom */
+    lv_obj_t *back = make_btn(ammo_page, "Back / Save", AMMO_BACK_W, AMMO_BACK_H);
+    lv_obj_set_ext_click_area(back, 14);
+    lv_obj_align(back, LV_ALIGN_BOTTOM_MID, 0, -58);
     lv_obj_add_event_cb(back, back_event, LV_EVENT_CLICKED, NULL);
 
     (void)screen_height;

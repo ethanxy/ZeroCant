@@ -44,6 +44,13 @@ static const battery_curve_point_t battery_curve[] = {
 #define BRIGHTNESS_MAX_PERCENT 100  // 最高亮度百分比
 #define BRIGHTNESS_STEP 10          // 亮度调节步长
 
+#define SETTINGS_ACTION_BTN_W     180
+#define SETTINGS_ACTION_BTN_H     40
+#define SETTINGS_ACTION_BTN_X     20
+#define SETTINGS_SET_LEVEL_Y      80
+#define SETTINGS_ACTION_BTN_GAP   32   /* Set Level 与 Ammo Setup 之间的间距 */
+#define SETTINGS_AMMO_SETUP_Y     (SETTINGS_SET_LEVEL_Y + SETTINGS_ACTION_BTN_H + SETTINGS_ACTION_BTN_GAP)
+
 static lv_obj_t *settings_screen = NULL;
 static lv_obj_t *voltage_label = NULL;
 static lv_obj_t *battery_percentage_label = NULL;
@@ -295,8 +302,8 @@ void settings_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     }
     
     // 设置按钮样式和位置
-    lv_obj_set_size(calibration_button, 180, 40);  // 按钮大小
-    lv_obj_align(calibration_button, LV_ALIGN_LEFT_MID, 20, 80);  // 距离左边20px，向下移动80px
+    lv_obj_set_size(calibration_button, SETTINGS_ACTION_BTN_W, SETTINGS_ACTION_BTN_H);
+    lv_obj_align(calibration_button, LV_ALIGN_LEFT_MID, SETTINGS_ACTION_BTN_X, SETTINGS_SET_LEVEL_Y);
     lv_obj_set_style_bg_color(calibration_button, lv_color_hex(0x404040), 0);  // 深灰色背景
     lv_obj_set_style_bg_opa(calibration_button, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(calibration_button, lv_color_white(), 0);   // 白色边框
@@ -324,8 +331,8 @@ void settings_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
         printf("settings_ui_init: Failed to create ammo_button\n");
         return;
     }
-    lv_obj_set_size(ammo_button, 180, 40);
-    lv_obj_align(ammo_button, LV_ALIGN_LEFT_MID, 20, 130);
+    lv_obj_set_size(ammo_button, SETTINGS_ACTION_BTN_W, SETTINGS_ACTION_BTN_H);
+    lv_obj_align(ammo_button, LV_ALIGN_LEFT_MID, SETTINGS_ACTION_BTN_X, SETTINGS_AMMO_SETUP_Y);
     lv_obj_set_style_bg_color(ammo_button, lv_color_hex(0x404040), 0);
     lv_obj_set_style_bg_opa(ammo_button, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(ammo_button, lv_color_white(), 0);
