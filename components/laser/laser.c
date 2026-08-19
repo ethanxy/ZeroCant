@@ -36,7 +36,8 @@ static int screen_height = 240;
 #define HOLD_GUIDE_HEIGHT   118
 
 #define LASER_FONT_IDLE       &lv_font_montserrat_24
-#define LASER_FONT_PROGRESS   &lv_font_montserrat_20
+#define LASER_FONT_PROGRESS   &lv_font_montserrat_24
+#define LASER_FONT_ERROR      &lv_font_montserrat_24
 #define LASER_FONT_STATUS     &lv_font_montserrat_16
 #define LASER_FONT_BTN        &lv_font_montserrat_16
 #define LASER_FONT_HOLD_VAL   &lv_font_montserrat_48
@@ -251,7 +252,19 @@ static bool laser_ui_status_is_idle(const char *text)
 static bool laser_ui_status_is_progress(const char *text)
 {
     return text && (strcmp(text, "Powering device...") == 0 ||
-                    strcmp(text, "Measuring distance...") == 0);
+                    strcmp(text, "Measuring distance...") == 0 ||
+                    strcmp(text, "Measuring...") == 0);
+}
+
+static bool laser_ui_status_is_error(const char *text)
+{
+    if (!text) {
+        return false;
+    }
+    return strstr(text, "Measurement timeout") != NULL ||
+           strstr(text, "No valid target") != NULL ||
+           strstr(text, "Sensor error") != NULL ||
+           strstr(text, "Measurement failed") != NULL;
 }
 
 static void laser_ui_status_apply_style(const char *text)
@@ -266,8 +279,12 @@ static void laser_ui_status_apply_style(const char *text)
         lv_obj_align(status_label, LV_ALIGN_CENTER, 0, LASER_IDLE_CENTER_Y);
     } else if (laser_ui_status_is_progress(text)) {
         lv_obj_set_style_text_font(status_label, LASER_FONT_PROGRESS, 0);
-        lv_obj_set_style_text_line_space(status_label, 4, 0);
-        lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 32);
+        lv_obj_set_style_text_line_space(status_label, 6, 0);
+        lv_obj_align(status_label, LV_ALIGN_CENTER, 0, LASER_IDLE_CENTER_Y);
+    } else if (laser_ui_status_is_error(text)) {
+        lv_obj_set_style_text_font(status_label, LASER_FONT_ERROR, 0);
+        lv_obj_set_style_text_line_space(status_label, 6, 0);
+        lv_obj_align(status_label, LV_ALIGN_CENTER, 0, LASER_IDLE_CENTER_Y);
     } else {
         lv_obj_set_style_text_font(status_label, LASER_FONT_STATUS, 0);
         lv_obj_set_style_text_line_space(status_label, 4, 0);
