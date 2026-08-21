@@ -36,6 +36,12 @@ extern uint8_t loadSavedBrightness(void);  // NVS亮度加载函数
 #define EXAMPLE_LCD_H_RES 280
 #define EXAMPLE_LCD_V_RES 456
 
+/* 0 = 隐藏全屏色块水平仪入口（保留模块代码，便于日后恢复）
+ * 1 = 重新启用 Level 滑动入口 */
+#ifndef FEATURE_UI_LEVEL
+#define FEATURE_UI_LEVEL  0
+#endif
+
 // 显示模式管理
 typedef enum {
     DISPLAY_MODE_ANGLE = 0,
@@ -47,6 +53,14 @@ typedef enum {
 static display_mode_t current_display_mode = DISPLAY_MODE_ANGLE;
 static display_mode_t previous_main_mode = DISPLAY_MODE_ANGLE; // 记录进入settings前的模组
 static bool mode_switching = false;
+
+#if !FEATURE_UI_LEVEL
+/* Level 下线时，把残留的 LEVEL 主模式回落到 ANGLE */
+static display_mode_t sanitize_main_mode(display_mode_t mode)
+{
+    return (mode == DISPLAY_MODE_LEVEL) ? DISPLAY_MODE_ANGLE : mode;
+}
+#endif
 // 已移除：未使用的触摸防抖变量
 // static uint32_t last_touch_time = 0;
 // static const uint32_t TOUCH_DEBOUNCE_MS = 500;
@@ -344,9 +358,15 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
             }
             
             switch (current_display_mode) {
+#if FEATURE_UI_LEVEL
                 case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_LEVEL; break;
                 case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_LASER; break;
                 case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_ANGLE; break;
+#else
+                case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_LASER; break;
+                case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_LASER; break; /* 残留 LEVEL 时跳过 */
+                case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_ANGLE; break;
+#endif
                 default: return false;
             }
             printf("SWIPE LEFT: %d -> %d (next main module)\n", current_display_mode, new_mode);
@@ -360,9 +380,15 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
             }
             
             switch (current_display_mode) {
+#if FEATURE_UI_LEVEL
                 case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_LASER; break;
                 case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_ANGLE; break;
                 case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_LEVEL; break;
+#else
+                case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_LASER; break;
+                case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_ANGLE; break; /* 残留 LEVEL 时回退 */
+                case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_ANGLE; break;
+#endif
                 default: return false;
             }
             printf("SWIPE RIGHT: %d -> %d (previous main module)\n", current_display_mode, new_mode);
@@ -389,6 +415,9 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
             }
             
             new_mode = previous_main_mode;
+#if !FEATURE_UI_LEVEL
+            new_mode = sanitize_main_mode(new_mode);
+#endif
             printf("SWIPE UP: Settings -> %d (restored previous module)\n", new_mode);
             break;
             
@@ -511,7 +540,11 @@ static void on_ui_state_changed(ui_state_t old_state, ui_state_t new_state) {
     if (current_display_mode == DISPLAY_MODE_SETTINGS && 
         old_mode != DISPLAY_MODE_SETTINGS &&
         (old_mode == DISPLAY_MODE_ANGLE || old_mode == DISPLAY_MODE_LEVEL || old_mode == DISPLAY_MODE_LASER)) {
+#if FEATURE_UI_LEVEL
         previous_main_mode = old_mode;
+#else
+        previous_main_mode = sanitize_main_mode(old_mode);
+#endif
         printf("SAVED previous main mode: %d before entering Settings\n", previous_main_mode);
     }
     
@@ -641,11 +674,13 @@ static void angle_update_task(void *arg) {
                     angle_display_update(pitch, roll);
                     example_lvgl_unlock();
                 }
+#if FEATURE_UI_LEVEL
             } else if (current_ui_state == UI_STATE_LEVEL && current_display_mode == DISPLAY_MODE_LEVEL) {
                 if (example_lvgl_lock(40)) {
                     level_display_update(roll);
                     example_lvgl_unlock();
                 }
+#endif
             } else if (current_ui_state == UI_STATE_LASER && current_display_mode == DISPLAY_MODE_LASER) {
                 // laser模式：不需要周期性更新，距离只在测量时显示
             } else if (current_ui_state == UI_STATE_SETTINGS && current_display_mode == DISPLAY_MODE_SETTINGS) {
