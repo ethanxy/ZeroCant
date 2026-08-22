@@ -21,11 +21,12 @@ extern "C" {
 // UI状态定义
 typedef enum {
     UI_STATE_ANGLE = 0,      // 角度显示模式
-    UI_STATE_LEVEL = 1,      // 水平仪模式  
+    UI_STATE_LEVEL = 1,      // 水平仪模式
     UI_STATE_LASER = 2,      // 激光测距模式
-    UI_STATE_SETTINGS = 3,   // 设置模式
-    UI_STATE_TRANSITIONING = 4,  // 过渡状态
-    UI_STATE_ERROR = 5,      // 错误状态
+    UI_STATE_ACTION = 3,     // 动作监控模式
+    UI_STATE_SETTINGS = 4,   // 设置模式
+    UI_STATE_TRANSITIONING = 5,  // 过渡状态
+    UI_STATE_ERROR = 6,      // 错误状态
     UI_STATE_MAX
 } ui_state_t;
 
@@ -100,6 +101,8 @@ typedef struct {
     void (*cleanup_level_ui)(void);                           // 清理水平仪UI
     void (*init_laser_ui)(lv_obj_t *parent, int w, int h);    // 初始化激光UI
     void (*cleanup_laser_ui)(void);                           // 清理激光UI
+    void (*init_action_ui)(lv_obj_t *parent, int w, int h);   // 初始化动作监控UI
+    void (*cleanup_action_ui)(void);                          // 清理动作监控UI
     void (*init_settings_ui)(lv_obj_t *parent, int w, int h); // 初始化设置UI
     void (*cleanup_settings_ui)(void);                        // 清理设置UI
 } ui_operations_t;

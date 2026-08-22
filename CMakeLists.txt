@@ -3,11 +3,10 @@
 # The following five lines of boilerplate have to be in your project's
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.5)
-# Firmware version shown in Settings as "FW <ver>" (YYYYMMDDHH).
-# Default: auto from configure-time local date+hour. Override anytime:
-#   idf.py -DPROJECT_VER=2026080917 build
+# Firmware version shown in Settings as "FW <ver>".
+# Override anytime: idf.py -DPROJECT_VER=0.15.0 build
 if(NOT DEFINED PROJECT_VER)
-    string(TIMESTAMP PROJECT_VER "%Y%m%d%H")
+    set(PROJECT_VER "0.14.0")
 endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 add_compile_options("-Wno-format")

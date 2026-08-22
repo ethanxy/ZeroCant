@@ -27,6 +27,7 @@ extern uint8_t loadSavedBrightness(void);  // NVS亮度加载函数
 // 编译时选择启动模式
 // #define LASER_TEST_MODE  // 取消注释以启用激光测试模式
 #include "level_display.h"
+#include "action_display.h"
 #include "main.h"  // 包含LVGL锁函数和shutdownDisplay函数声明
 #include "esp_task_wdt.h"
 #include "touch_bsp.h"
@@ -47,7 +48,8 @@ typedef enum {
     DISPLAY_MODE_ANGLE = 0,
     DISPLAY_MODE_LEVEL = 1,
     DISPLAY_MODE_LASER = 2,
-    DISPLAY_MODE_SETTINGS = 3
+    DISPLAY_MODE_ACTION = 3,
+    DISPLAY_MODE_SETTINGS = 4
 } display_mode_t;
 
 static display_mode_t current_display_mode = DISPLAY_MODE_ANGLE;
@@ -351,7 +353,7 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
     
     switch (direction) {
         case SWIPE_LEFT:
-            // 向左滑 - 下一个主模组 (仅限 Angle, Level, Laser)
+            // 向左滑 - 下一个主模组 (Angle / Action / Laser，可选 Level)
             if (current_display_mode == DISPLAY_MODE_SETTINGS) {
                 printf("SWIPE LEFT: Settings mode doesn't support horizontal switching\n");
                 return false;
@@ -360,11 +362,13 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
             switch (current_display_mode) {
 #if FEATURE_UI_LEVEL
                 case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_LEVEL; break;
-                case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_LASER; break;
+                case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_ACTION; break;
+                case DISPLAY_MODE_ACTION: new_mode = DISPLAY_MODE_LASER; break;
                 case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_ANGLE; break;
 #else
-                case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_LASER; break;
-                case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_LASER; break; /* 残留 LEVEL 时跳过 */
+                case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_ACTION; break;
+                case DISPLAY_MODE_ACTION: new_mode = DISPLAY_MODE_LASER; break;
+                case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_ACTION; break; /* 残留 LEVEL 时跳过 */
                 case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_ANGLE; break;
 #endif
                 default: return false;
@@ -373,7 +377,7 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
             break;
             
         case SWIPE_RIGHT:
-            // 向右滑 - 上一个主模组 (仅限 Angle, Level, Laser)
+            // 向右滑 - 上一个主模组 (Angle / Action / Laser，可选 Level)
             if (current_display_mode == DISPLAY_MODE_SETTINGS) {
                 printf("SWIPE RIGHT: Settings mode doesn't support horizontal switching\n");
                 return false;
@@ -382,12 +386,14 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
             switch (current_display_mode) {
 #if FEATURE_UI_LEVEL
                 case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_LASER; break;
+                case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_ACTION; break;
+                case DISPLAY_MODE_ACTION: new_mode = DISPLAY_MODE_LEVEL; break;
                 case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_ANGLE; break;
-                case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_LEVEL; break;
 #else
                 case DISPLAY_MODE_ANGLE:  new_mode = DISPLAY_MODE_LASER; break;
+                case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_ACTION; break;
+                case DISPLAY_MODE_ACTION: new_mode = DISPLAY_MODE_ANGLE; break;
                 case DISPLAY_MODE_LEVEL:  new_mode = DISPLAY_MODE_ANGLE; break; /* 残留 LEVEL 时回退 */
-                case DISPLAY_MODE_LASER:  new_mode = DISPLAY_MODE_ANGLE; break;
 #endif
                 default: return false;
             }
@@ -431,6 +437,7 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
             case DISPLAY_MODE_ANGLE:    target_state = UI_STATE_ANGLE; break;
             case DISPLAY_MODE_LEVEL:    target_state = UI_STATE_LEVEL; break;
             case DISPLAY_MODE_LASER:    target_state = UI_STATE_LASER; break;
+            case DISPLAY_MODE_ACTION:   target_state = UI_STATE_ACTION; break;
             case DISPLAY_MODE_SETTINGS: target_state = UI_STATE_SETTINGS; break;
             default: return false;
         }
@@ -518,6 +525,9 @@ static void on_ui_state_changed(ui_state_t old_state, ui_state_t new_state) {
         case UI_STATE_LASER:
             current_display_mode = DISPLAY_MODE_LASER;
             break;
+        case UI_STATE_ACTION:
+            current_display_mode = DISPLAY_MODE_ACTION;
+            break;
         case UI_STATE_SETTINGS:
             current_display_mode = DISPLAY_MODE_SETTINGS;
             settings_open_preview = false;
@@ -539,7 +549,8 @@ static void on_ui_state_changed(ui_state_t old_state, ui_state_t new_state) {
     // 管理previous_main_mode：如果是从主模组切换到Settings，更新previous_main_mode
     if (current_display_mode == DISPLAY_MODE_SETTINGS && 
         old_mode != DISPLAY_MODE_SETTINGS &&
-        (old_mode == DISPLAY_MODE_ANGLE || old_mode == DISPLAY_MODE_LEVEL || old_mode == DISPLAY_MODE_LASER)) {
+        (old_mode == DISPLAY_MODE_ANGLE || old_mode == DISPLAY_MODE_LEVEL ||
+         old_mode == DISPLAY_MODE_LASER || old_mode == DISPLAY_MODE_ACTION)) {
 #if FEATURE_UI_LEVEL
         previous_main_mode = old_mode;
 #else
@@ -681,6 +692,11 @@ static void angle_update_task(void *arg) {
                     example_lvgl_unlock();
                 }
 #endif
+            } else if (current_ui_state == UI_STATE_ACTION && current_display_mode == DISPLAY_MODE_ACTION) {
+                if (example_lvgl_lock(40)) {
+                    action_display_update(pitch, roll);
+                    example_lvgl_unlock();
+                }
             } else if (current_ui_state == UI_STATE_LASER && current_display_mode == DISPLAY_MODE_LASER) {
                 // laser模式：不需要周期性更新，距离只在测量时显示
             } else if (current_ui_state == UI_STATE_SETTINGS && current_display_mode == DISPLAY_MODE_SETTINGS) {

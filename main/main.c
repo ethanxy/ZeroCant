@@ -31,6 +31,7 @@
 #include "ui_state_manager.h" // 添加UI状态管理器
 #include "angle_display.h" // 角度显示组件
 #include "level_display.h" // 水平仪显示组件
+#include "action_display.h" // 动作监控组件
 #include "laser.h" // 激光组件
 #include "settings.h" // 设置组件
 
@@ -833,6 +834,8 @@ void app_main(void)
             .cleanup_level_ui = level_display_cleanup,
             .init_laser_ui = laser_ui_init,
             .cleanup_laser_ui = laser_ui_cleanup,
+            .init_action_ui = action_display_init,
+            .cleanup_action_ui = action_display_cleanup,
             .init_settings_ui = settings_ui_init,
             .cleanup_settings_ui = settings_ui_cleanup
         };

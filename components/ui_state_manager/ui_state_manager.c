@@ -24,8 +24,9 @@ static int g_callback_count = 0;
 // 状态名称映射
 static const char* g_state_names[] = {
     "ANGLE",
-    "LEVEL", 
+    "LEVEL",
     "LASER",
+    "ACTION",
     "SETTINGS",
     "TRANSITIONING",
     "ERROR"
@@ -33,13 +34,14 @@ static const char* g_state_names[] = {
 
 // 状态转换有效性矩阵
 static const bool g_transition_matrix[UI_STATE_MAX][UI_STATE_MAX] = {
-    // FROM\TO    ANGLE LEVEL LASER SETTINGS TRANS ERROR
-    /* ANGLE */   {false, true,  true,  true,   false, true},
-    /* LEVEL */   {true,  false, true,  true,   false, true},
-    /* LASER */   {true,  true,  false, true,   false, true},
-    /* SETTINGS */{true,  true,  true,  false,  false, true},
-    /* TRANS */   {false, false, false, false, false, true},
-    /* ERROR */   {true,  true,  true,  true,   false, false}
+    // FROM\TO    ANGLE LEVEL LASER ACTION SETTINGS TRANS ERROR
+    /* ANGLE */   {false, true,  true,  true,  true,   false, true},
+    /* LEVEL */   {true,  false, true,  true,  true,   false, true},
+    /* LASER */   {true,  true,  false, true,  true,   false, true},
+    /* ACTION */  {true,  true,  true,  false, true,   false, true},
+    /* SETTINGS */{true,  true,  true,  true,  false,  false, true},
+    /* TRANS */   {false, false, false, false, false,  false, true},
+    /* ERROR */   {true,  true,  true,  true,  true,   false, false}
 };
 
 // 前向声明
@@ -490,6 +492,11 @@ static esp_err_t execute_transition_step(transition_context_t *ctx) {
                         g_ui_ops.cleanup_laser_ui();
                     }
                     break;
+                case UI_STATE_ACTION:
+                    if (g_ui_ops.cleanup_action_ui) {
+                        g_ui_ops.cleanup_action_ui();
+                    }
+                    break;
                 case UI_STATE_SETTINGS:
                     if (g_ui_ops.cleanup_settings_ui) {
                         g_ui_ops.cleanup_settings_ui();
@@ -539,6 +546,11 @@ static esp_err_t execute_transition_step(transition_context_t *ctx) {
                 case UI_STATE_LASER:
                     if (g_ui_ops.init_laser_ui) {
                         g_ui_ops.init_laser_ui(parent, UI_LCD_WIDTH, UI_LCD_HEIGHT);
+                    }
+                    break;
+                case UI_STATE_ACTION:
+                    if (g_ui_ops.init_action_ui) {
+                        g_ui_ops.init_action_ui(parent, UI_LCD_WIDTH, UI_LCD_HEIGHT);
                     }
                     break;
                 case UI_STATE_SETTINGS:
