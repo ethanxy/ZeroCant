@@ -110,6 +110,7 @@ static void apply_ui(void)
         lv_obj_set_style_border_width(g_ctx.root, 0, 0);
         lv_obj_set_style_radius(g_ctx.root, 0, 0);
         lv_obj_clear_flag(g_ctx.root, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(g_ctx.root, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(g_ctx.root, LV_OBJ_FLAG_FLOATING);
 
         g_ctx.title_label = lv_label_create(g_ctx.root);

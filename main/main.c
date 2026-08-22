@@ -3,6 +3,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/spi_master.h"
@@ -175,19 +176,75 @@ static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
     {0x51, (uint8_t []){0x1A}, 1, 0},    // 设置较低的初始亮度 (26/255 ≈ 10%)
 };
 
+static volatile bool s_burn_need_invalidate = false;
+static esp_lcd_panel_handle_t s_panel_handle = NULL;
+static lv_color_t *s_burn_edge_clear = NULL;
+static size_t s_burn_edge_clear_px = 0;
+static TaskHandle_t s_lvgl_task = NULL;
+static SemaphoreHandle_t s_aux_lcd_done = NULL;
+static volatile bool s_aux_lcd_xfer = false;
+static uint32_t s_flush_wait_loops = 0;
+static int64_t s_flush_wait_start_us = 0;
+
 static bool example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
+    (void)panel_io;
+    (void)edata;
+    if (s_aux_lcd_xfer) {
+        BaseType_t hp_task_woken = pdFALSE;
+        if (s_aux_lcd_done) {
+            xSemaphoreGiveFromISR(s_aux_lcd_done, &hp_task_woken);
+        }
+        return hp_task_woken == pdTRUE;
+    }
+    s_flush_wait_loops = 0;
     lv_disp_drv_t *disp_driver = (lv_disp_drv_t *)user_ctx;
     lv_disp_flush_ready(disp_driver);
     return false;
 }
 
-static lv_color_t *s_burn_flush_scratch = NULL;
-static size_t s_burn_flush_scratch_px = 0;
-static volatile bool s_burn_need_invalidate = false;
-static esp_lcd_panel_handle_t s_panel_handle = NULL;
-static lv_color_t *s_burn_edge_clear = NULL;
-static size_t s_burn_edge_clear_px = 0;
+static void example_lvgl_wait_cb(lv_disp_drv_t *drv)
+{
+    if (s_flush_wait_loops == 0) {
+        s_flush_wait_start_us = esp_timer_get_time();
+    }
+    s_flush_wait_loops++;
+    if ((s_flush_wait_loops & 31U) == 0U) {
+        taskYIELD();
+    }
+    if (esp_timer_get_time() - s_flush_wait_start_us > 200000) {
+        ESP_LOGE(TAG, "LCD flush stall, forcing ready");
+        s_flush_wait_loops = 0;
+        lv_disp_flush_ready(drv);
+    }
+}
+
+static bool wait_lvgl_flush_idle(void)
+{
+    lv_disp_t *disp = lv_disp_get_default();
+    if (!disp || !disp->driver || !disp->driver->draw_buf) {
+        return true;
+    }
+    int spins = 0;
+    while (disp->driver->draw_buf->flushing && spins++ < 200) {
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    return !disp->driver->draw_buf->flushing;
+}
+
+static void panel_draw_bitmap_wait(int x1, int y1, int x2, int y2, const void *color)
+{
+    if (!s_panel_handle || !s_aux_lcd_done) {
+        return;
+    }
+    xSemaphoreTake(s_aux_lcd_done, 0);
+    s_aux_lcd_xfer = true;
+    esp_lcd_panel_draw_bitmap(s_panel_handle, x1, y1, x2, y2, color);
+    if (xSemaphoreTake(s_aux_lcd_done, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "aux LCD xfer timeout");
+    }
+    s_aux_lcd_xfer = false;
+}
 
 /** Clear physical screen margins left by pixel-shift (top/bottom/left/right). */
 void display_clear_burn_edges(void)
@@ -195,8 +252,21 @@ void display_clear_burn_edges(void)
     if (!s_panel_handle) {
         return;
     }
+    /* Other tasks only request a clear; the LVGL task owns the panel bus. */
+    if (!s_lvgl_task || xTaskGetCurrentTaskHandle() != s_lvgl_task) {
+        s_burn_need_invalidate = true;
+        return;
+    }
+    if (!wait_lvgl_flush_idle()) {
+        ESP_LOGW(TAG, "Skip edge clear, flush still busy");
+        s_burn_need_invalidate = true;
+        return;
+    }
+
     const int edge = 4; /* > max burn offset (2) */
-    const size_t need = (size_t)EXAMPLE_LCD_H_RES * (size_t)edge;
+    const size_t need_tb = (size_t)EXAMPLE_LCD_H_RES * (size_t)edge;
+    const size_t need_lr = (size_t)edge * (size_t)EXAMPLE_LCD_V_RES;
+    const size_t need = (need_lr > need_tb) ? need_lr : need_tb;
     if (!s_burn_edge_clear || s_burn_edge_clear_px < need) {
         lv_color_t *fresh = (lv_color_t *)heap_caps_malloc(
             need * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
@@ -218,31 +288,18 @@ void display_clear_burn_edges(void)
         s_burn_edge_clear[i] = black;
     }
 
-    /* top + bottom full-width bands */
-    esp_lcd_panel_draw_bitmap(s_panel_handle,
-                              0x14, 0,
-                              0x14 + EXAMPLE_LCD_H_RES, edge,
-                              s_burn_edge_clear);
-    esp_lcd_panel_draw_bitmap(s_panel_handle,
-                              0x14, EXAMPLE_LCD_V_RES - edge,
-                              0x14 + EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES,
-                              s_burn_edge_clear);
-
-    /* left + right strips */
-    for (int y = 0; y < EXAMPLE_LCD_V_RES; y += edge) {
-        int h = edge;
-        if (y + h > EXAMPLE_LCD_V_RES) {
-            h = EXAMPLE_LCD_V_RES - y;
-        }
-        esp_lcd_panel_draw_bitmap(s_panel_handle,
-                                  0x14, y,
-                                  0x14 + edge, y + h,
-                                  s_burn_edge_clear);
-        esp_lcd_panel_draw_bitmap(s_panel_handle,
-                                  0x14 + EXAMPLE_LCD_H_RES - edge, y,
-                                  0x14 + EXAMPLE_LCD_H_RES, y + h,
-                                  s_burn_edge_clear);
-    }
+    panel_draw_bitmap_wait(0x14, 0,
+                           0x14 + EXAMPLE_LCD_H_RES, edge,
+                           s_burn_edge_clear);
+    panel_draw_bitmap_wait(0x14, EXAMPLE_LCD_V_RES - edge,
+                           0x14 + EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES,
+                           s_burn_edge_clear);
+    panel_draw_bitmap_wait(0x14, 0,
+                           0x14 + edge, EXAMPLE_LCD_V_RES,
+                           s_burn_edge_clear);
+    panel_draw_bitmap_wait(0x14 + EXAMPLE_LCD_H_RES - edge, 0,
+                           0x14 + EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES,
+                           s_burn_edge_clear);
 }
 
 static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
@@ -264,243 +321,29 @@ static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_
     int8_t burn_oy = 0;
     amoled_burn_protection_get_offset(&burn_ox, &burn_oy);
 
+#if LCD_BIT_PER_PIXEL == 24
     const int src_w = area->x2 - area->x1 + 1;
     const int src_h = area->y2 - area->y1 + 1;
-    int dst_x = area->x1 + burn_ox;
-    int dst_y = area->y1 + burn_oy;
-    int copy_w = src_w;
-    int copy_h = src_h;
-    int src_x0 = 0;
-    int src_y0 = 0;
-
-    if (burn_ox == 0 && burn_oy == 0) {
-#if LCD_BIT_PER_PIXEL == 24
-        uint8_t *to = (uint8_t *)color_map;
-        uint8_t temp = color_map[0].ch.blue;
-        uint16_t pixel_num = (uint16_t)(src_w * src_h);
-        *to++ = color_map[0].ch.red;
-        *to++ = color_map[0].ch.green;
-        *to++ = temp;
-        for (int i = 1; i < pixel_num; i++) {
-            *to++ = color_map[i].ch.red;
-            *to++ = color_map[i].ch.green;
-            *to++ = color_map[i].ch.blue;
-        }
+    uint8_t *to = (uint8_t *)color_map;
+    uint8_t temp = color_map[0].ch.blue;
+    int pixel_num = src_w * src_h;
+    *to++ = color_map[0].ch.red;
+    *to++ = color_map[0].ch.green;
+    *to++ = temp;
+    for (int i = 1; i < pixel_num; i++) {
+        *to++ = color_map[i].ch.red;
+        *to++ = color_map[i].ch.green;
+        *to++ = color_map[i].ch.blue;
+    }
 #endif
-        esp_lcd_panel_draw_bitmap(panel_handle,
-                                  area->x1 + 0x14, area->y1,
-                                  area->x2 + 0x14 + 1, area->y2 + 1,
-                                  color_map);
-        return;
-    }
-
-    if (dst_x < 0) {
-        src_x0 = -dst_x;
-        copy_w -= src_x0;
-        dst_x = 0;
-    }
-    if (dst_y < 0) {
-        src_y0 = -dst_y;
-        copy_h -= src_y0;
-        dst_y = 0;
-    }
-    if (dst_x + copy_w > EXAMPLE_LCD_H_RES) {
-        copy_w = EXAMPLE_LCD_H_RES - dst_x;
-    }
-    if (dst_y + copy_h > EXAMPLE_LCD_V_RES) {
-        copy_h = EXAMPLE_LCD_V_RES - dst_y;
-    }
-
-    /*
-     * 偶数对齐优先扩边重叠，禁止把 1/4 缓冲条带裁短，否则接缝会留下黑线/残影。
-     * 防烧屏偏移已限制为偶数，多数块可整块平移。
-     */
-    if ((dst_x & 1) && dst_x > 0 && src_x0 > 0) {
-        dst_x--;
-        src_x0--;
-        copy_w++;
-    } else if (dst_x & 1) {
-        dst_x++;
-        src_x0++;
-        copy_w--;
-    }
-    if ((dst_y & 1) && dst_y > 0 && src_y0 > 0) {
-        dst_y--;
-        src_y0--;
-        copy_h++;
-    } else if (dst_y & 1) {
-        dst_y++;
-        src_y0++;
-        copy_h--;
-    }
-    if ((copy_w & 1) && dst_x + copy_w < EXAMPLE_LCD_H_RES && src_x0 + copy_w < src_w) {
-        copy_w++;
-    } else if (copy_w & 1) {
-        copy_w--;
-    }
-    if ((copy_h & 1) && dst_y + copy_h < EXAMPLE_LCD_V_RES && src_y0 + copy_h < src_h) {
-        copy_h++;
-    } else if (copy_h & 1) {
-        copy_h--;
-    }
-
-    if (copy_w <= 0 || copy_h <= 0 ||
-        src_x0 < 0 || src_y0 < 0 ||
-        src_x0 + copy_w > src_w || src_y0 + copy_h > src_h) {
-        lv_disp_flush_ready(drv);
-        return;
-    }
-
-    /*
-     * 右移后左侧会留旧像素；下移后顶部同理。
-     * 左右：每条 flush 都可从 x=0 补黑（条带通常全宽）。
-     * 上下：仅在刷顶部/底部条带时扩边，避免中间条带把上方 UI 涂黑。
-     */
-    int pad_left = 0;
-    int pad_right = 0;
-    int pad_top = 0;
-    int pad_bottom = 0;
-    int draw_x = dst_x;
-    int draw_y = dst_y;
-    int draw_w = copy_w;
-    int draw_h = copy_h;
-
-    if (burn_ox > 0 && dst_x > 0) {
-        pad_left = dst_x;
-        draw_x = 0;
-        draw_w = dst_x + copy_w;
-    }
-    if (burn_ox < 0) {
-        int right_end = dst_x + copy_w;
-        if (right_end < EXAMPLE_LCD_H_RES) {
-            pad_right = EXAMPLE_LCD_H_RES - right_end;
-            draw_w = copy_w + pad_right;
-        }
-    }
-    if (burn_oy > 0 && area->y1 == 0 && dst_y > 0) {
-        pad_top = dst_y;
-        draw_y = 0;
-        draw_h = dst_y + copy_h;
-    }
-    if (burn_oy < 0 && area->y2 >= (EXAMPLE_LCD_V_RES - 1)) {
-        int bottom_end = dst_y + copy_h;
-        if (bottom_end < EXAMPLE_LCD_V_RES) {
-            pad_bottom = EXAMPLE_LCD_V_RES - bottom_end;
-            draw_h = copy_h + pad_bottom;
-        }
-    }
-
-    if (draw_w & 1) {
-        if (draw_x + draw_w < EXAMPLE_LCD_H_RES) {
-            draw_w++;
-            pad_right++;
-        } else if (draw_w > 1) {
-            draw_w--;
-            if (pad_right > 0) {
-                pad_right--;
-            } else {
-                copy_w--;
-            }
-        }
-    }
-    if (draw_h & 1) {
-        if (draw_y + draw_h < EXAMPLE_LCD_V_RES) {
-            draw_h++;
-            pad_bottom++;
-        } else if (draw_h > 1) {
-            draw_h--;
-            if (pad_bottom > 0) {
-                pad_bottom--;
-            } else {
-                copy_h--;
-            }
-        }
-    }
-    if ((draw_x & 1) && draw_x > 0) {
-        draw_x--;
-        pad_left++;
-        draw_w++;
-    } else if (draw_x & 1) {
-        draw_x++;
-        if (pad_left > 0) {
-            pad_left--;
-            draw_w--;
-        }
-    }
-    if ((draw_y & 1) && draw_y > 0) {
-        draw_y--;
-        pad_top++;
-        draw_h++;
-    } else if (draw_y & 1) {
-        draw_y++;
-        if (pad_top > 0) {
-            pad_top--;
-            draw_h--;
-        }
-    }
-
-    const bool need_pack = (pad_left > 0 || pad_right > 0 || pad_top > 0 || pad_bottom > 0 ||
-                            src_x0 != 0 || src_y0 != 0 ||
-                            copy_w != src_w || copy_h != src_h ||
-                            draw_w != copy_w || draw_h != copy_h);
-    const lv_color_t *blit_src = color_map;
-
-    if (need_pack) {
-        size_t need_px = (size_t)draw_w * (size_t)draw_h;
-        if (!s_burn_flush_scratch || s_burn_flush_scratch_px < need_px) {
-            size_t alloc_px = EXAMPLE_LCD_H_RES * (EXAMPLE_LVGL_BUF_HEIGHT + 8);
-            if (alloc_px < need_px) {
-                alloc_px = need_px;
-            }
-            lv_color_t *fresh = (lv_color_t *)heap_caps_malloc(
-                alloc_px * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-            if (!fresh) {
-                fresh = (lv_color_t *)heap_caps_malloc(
-                    alloc_px * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-            }
-            if (!fresh) {
-                lv_disp_flush_ready(drv);
-                return;
-            }
-            if (s_burn_flush_scratch) {
-                heap_caps_free(s_burn_flush_scratch);
-            }
-            s_burn_flush_scratch = fresh;
-            s_burn_flush_scratch_px = alloc_px;
-        }
-
-        const lv_color_t black = lv_color_black();
-        for (int row = 0; row < draw_h; row++) {
-            lv_color_t *dst_row = s_burn_flush_scratch + row * draw_w;
-            const bool in_content = (row >= pad_top) && (row < pad_top + copy_h);
-            if (!in_content) {
-                for (int col = 0; col < draw_w; col++) {
-                    dst_row[col] = black;
-                }
-                continue;
-            }
-            int src_row = row - pad_top;
-            int col = 0;
-            for (; col < pad_left; col++) {
-                dst_row[col] = black;
-            }
-            memcpy(dst_row + pad_left,
-                   color_map + (src_y0 + src_row) * src_w + src_x0,
-                   (size_t)copy_w * sizeof(lv_color_t));
-            col = pad_left + copy_w;
-            for (; col < draw_w; col++) {
-                dst_row[col] = black;
-            }
-        }
-        blit_src = s_burn_flush_scratch;
-    }
-
+    /* Shift in the panel window only — no per-frame CPU pack. Exposed
+     * 2px edges are blacked by display_clear_burn_edges() on offset change. */
     esp_lcd_panel_draw_bitmap(panel_handle,
-                              draw_x + 0x14,
-                              draw_y,
-                              draw_x + 0x14 + draw_w,
-                              draw_y + draw_h,
-                              blit_src);
+                              area->x1 + 0x14 + burn_ox,
+                              area->y1 + burn_oy,
+                              area->x2 + 0x14 + 1 + burn_ox,
+                              area->y2 + 1 + burn_oy,
+                              color_map);
 }
 
 void example_lvgl_rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area)
@@ -718,6 +561,9 @@ void app_main(void)
     ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
     ESP_LOGI(TAG, "Install panel IO");
+    if (!s_aux_lcd_done) {
+        s_aux_lcd_done = xSemaphoreCreateBinary();
+    }
     esp_lcd_panel_io_handle_t io_handle = NULL;
     const esp_lcd_panel_io_spi_config_t io_config = SH8601_PANEL_IO_QSPI_CONFIG(EXAMPLE_PIN_NUM_LCD_CS,
                                                                                 example_notify_lvgl_flush_ready,
@@ -785,6 +631,7 @@ void app_main(void)
     disp_drv.ver_res = EXAMPLE_LCD_V_RES;
     disp_drv.flush_cb = example_lvgl_flush_cb;
     disp_drv.rounder_cb = example_lvgl_rounder_cb;
+    disp_drv.wait_cb = example_lvgl_wait_cb;
     disp_drv.draw_buf = &disp_buf;
     disp_drv.user_data = panel_handle;
     s_panel_handle = panel_handle;
@@ -811,7 +658,7 @@ void app_main(void)
 
     lvgl_mux = xSemaphoreCreateMutex();
     assert(lvgl_mux);
-    xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
+    xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, &s_lvgl_task);
 
     ESP_LOGI(TAG, "Display LVGL demos");
     // Lock the mutex due to the LVGL APIs are not thread-safe

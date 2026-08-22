@@ -8,6 +8,7 @@
 
 #define I2C_ADDR_FT3168 0x38
 #define TOUCH_CACHE_MS 5
+#define TOUCH_WAKE_INTERVAL_MS 1000
 
 static SemaphoreHandle_t s_touch_mutex = NULL;
 static uint16_t s_cached_x = 0;
@@ -15,6 +16,19 @@ static uint16_t s_cached_y = 0;
 static uint8_t s_cached_pressed = 0;
 static TickType_t s_cached_tick = 0;
 static bool s_cache_valid = false;
+static TickType_t s_last_wake_tick = 0;
+
+static void touch_keep_awake(void)
+{
+  TickType_t now = xTaskGetTickCount();
+  if (s_last_wake_tick != 0 &&
+      (now - s_last_wake_tick) < pdMS_TO_TICKS(TOUCH_WAKE_INTERVAL_MS)) {
+    return;
+  }
+  uint8_t mode = 0x00;
+  I2C_writr_buff(I2C_ADDR_FT3168, 0x00, &mode, 1);
+  s_last_wake_tick = now;
+}
 
 void touch_Init(void)
 {
@@ -62,6 +76,7 @@ uint8_t getTouch(uint16_t *x,uint16_t *y)
   uint16_t raw_x = 0;
   uint16_t raw_y = 0;
 
+  touch_keep_awake();
   I2C_read_buff(I2C_ADDR_FT3168,0x02,&data,1);
   if(data)
   {
