@@ -10,10 +10,10 @@
 
 static const char *TAG = "action_display";
 
-/* Outer ring default ±5°. UI steps this by ±5°. */
-#define ANGLE_RANGE_DEFAULT     10.0f
-#define ANGLE_RANGE_STEP        5.0f
-#define ANGLE_RANGE_MIN         5.0f
+/* Outer ring default ±4°. UI steps this by ±1°. */
+#define ANGLE_RANGE_DEFAULT     4.0f
+#define ANGLE_RANGE_STEP        1.0f
+#define ANGLE_RANGE_MIN         3.0f
 #define ANGLE_RANGE_MAX         45.0f
 #define TRAIL_CAP               200
 #define TRAIL_DEFAULT           20
