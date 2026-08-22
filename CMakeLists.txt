@@ -4,9 +4,9 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.5)
 # Firmware version shown in Settings as "FW <ver>".
-# Override anytime: idf.py -DPROJECT_VER=0.15.0 build
+# Override anytime: idf.py -DPROJECT_VER=0.1.5 build
 if(NOT DEFINED PROJECT_VER)
-    set(PROJECT_VER "0.14.0")
+    set(PROJECT_VER "0.1.4")
 endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 add_compile_options("-Wno-format")
