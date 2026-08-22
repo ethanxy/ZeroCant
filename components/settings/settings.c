@@ -66,34 +66,12 @@ static lv_obj_t *version_label = NULL;    // 固件版本号
 static int screen_width = 240;
 static int screen_height = 240;
 
-// Build YYYYMMDDHH from compiler __DATE__/__TIME__ when app descriptor has no version.
-static void format_version_from_build_time(char *out, size_t out_len) {
-    // __DATE__ = "Mmm dd yyyy", __TIME__ = "hh:mm:ss"
-    static const char *months = "JanFebMarAprMayJunJulAugSepOctNovDec";
-    char month_str[4] = {0};
-    int day = 0, year = 0, hour = 0;
-    if (sscanf(__DATE__, "%3s %d %d", month_str, &day, &year) != 3) {
-        snprintf(out, out_len, "unknown");
-        return;
-    }
-    if (sscanf(__TIME__, "%d:", &hour) != 1) {
-        hour = 0;
-    }
-    const char *p = strstr(months, month_str);
-    int month = p ? (int)(p - months) / 3 + 1 : 0;
-    snprintf(out, out_len, "%04d%02d%02d%02d", year, month, day, hour);
-}
-
 static const char *resolve_firmware_version(void) {
-    static char fallback_version[16];
     const esp_app_desc_t *app_desc = esp_app_get_description();
-    if (app_desc && app_desc->version[0] != '\0' &&
-        strcmp(app_desc->version, "1") != 0 &&
-        strcmp(app_desc->version, "0.0.0") != 0) {
+    if (app_desc && app_desc->version[0] != '\0') {
         return app_desc->version;
     }
-    format_version_from_build_time(fallback_version, sizeof(fallback_version));
-    return fallback_version;
+    return "unknown";
 }
 
 // 外部函数声明
