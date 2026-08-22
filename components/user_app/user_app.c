@@ -6,7 +6,6 @@
 #include "events_init.h"
 #include "custom.h"
 #include "esp_timer.h"
-#include "esp_sleep.h"  // 添加深度休眠支持
 #include "esp_log.h"    // 添加日志支持
 #include "adc_bsp.h"
 #include "esp_wifi_bsp.h"
@@ -67,12 +66,6 @@ static display_mode_t sanitize_main_mode(display_mode_t mode)
 // static uint32_t last_touch_time = 0;
 // static const uint32_t TOUCH_DEBOUNCE_MS = 500;
 
-// 长按深度休眠状态管理
-static bool long_press_active = false;
-static uint32_t long_press_start_time = 0;
-static uint16_t long_press_start_x = 0;
-static uint16_t long_press_start_y = 0;
-
 // 滑动检测状态管理
 static bool swipe_active = false;
 static uint16_t swipe_start_x = 0;
@@ -110,15 +103,6 @@ static const uint32_t VOLTAGE_UPDATE_INTERVAL_MS = 1000; // 1秒更新一次电�
 #define TOUCH_AREA_X2 (TOUCH_AREA_X1 + TOUCH_AREA_SIZE - 1)  // 139
 #define TOUCH_AREA_Y2 (EXAMPLE_LCD_V_RES - 1)  // 455
 
-// 右上角深度休眠区域定义 (140×140px)
-#define SLEEP_AREA_SIZE 140
-#define SLEEP_AREA_X1 (EXAMPLE_LCD_H_RES - SLEEP_AREA_SIZE)  // 280 - 140 = 140
-#define SLEEP_AREA_Y1 0
-#define SLEEP_AREA_X2 (EXAMPLE_LCD_H_RES - 1)  // 279
-#define SLEEP_AREA_Y2 (SLEEP_AREA_SIZE - 1)    // 139
-
-// 长按检测参数
-#define LONG_PRESS_DURATION_MS 1000  // 1秒长按
 #define TOUCH_POLL_INTERVAL_MS 20    // 20ms轮询间隔 (从100ms优化为20ms，提高滑动检测精度)
 
 // LVGL初始化就绪标志 - 防止冷启动时的竞态条件
@@ -146,17 +130,7 @@ extern uint8_t getBrightness(void);
 
 // 触摸切换相关函数声明
 static void transform_touch_coordinates(uint16_t raw_x, uint16_t raw_y, uint16_t *screen_x, uint16_t *screen_y);
-static bool is_touch_in_sleep_area(uint16_t x, uint16_t y);
-static void deep_sleep_handler(void);
 static void touch_monitor_task(void *arg);
-
-// 倒计时功能相关声明
-static void countdown_screen_show(void);
-static void countdown_screen_hide(void);
-static void countdown_update_display(int seconds);
-static lv_obj_t *countdown_screen = NULL;
-static lv_obj_t *countdown_label = NULL;
-static lv_obj_t *countdown_hint_label = NULL;
 
 /*事件*/
 static void screen_btn_event_handler (lv_event_t *e);
@@ -453,13 +427,6 @@ static bool handle_swipe_switch(swipe_direction_t direction) {
     return true;
 }
 
-// 检查触摸是否在右上角深度休眠区域内
-static bool is_touch_in_sleep_area(uint16_t x, uint16_t y) {
-    // 移除冗余的 y >= SLEEP_AREA_Y1 检查，因为 SLEEP_AREA_Y1 = 0 且 y 是 uint16_t
-    return (x >= SLEEP_AREA_X1 && x <= SLEEP_AREA_X2 && 
-            y <= SLEEP_AREA_Y2);
-}
-
 // 使用新状态管理器的安全显示模式切换 (已弃用 - 改为滑动切换)
 /*
 static esp_err_t switch_display_mode_safe(void) {
@@ -582,55 +549,6 @@ static void display_mode_touch_handler(uint16_t x, uint16_t y) {
     switch_display_mode_safe();
 }
 */
-
-// 深度休眠处理函数
-static void deep_sleep_handler(void) {
-    printf("DEEP SLEEP: Preparing for deep sleep with countdown...\n");
-
-    idle_sleep_stop();
-    
-    // 显示倒计时屏幕
-    countdown_screen_show();
-    
-    // 倒计时3秒，但每个数字显示时间缩短50% (0.5秒每个数字，总共1.5秒)
-    for (int i = 3; i > 0; i--) {
-        countdown_update_display(i);
-        printf("COUNTDOWN: %d seconds remaining\n", i);
-        vTaskDelay(pdMS_TO_TICKS(500));  // 等待0.5秒 (缩短50%)
-        
-        // 在倒计时期间检查是否取消（通过触摸释放）
-        uint16_t raw_x, raw_y;
-        if (!getTouch(&raw_x, &raw_y)) {
-            printf("COUNTDOWN: Cancelled - touch released during countdown\n");
-            countdown_screen_hide();
-            return;  // 取消深睡眠
-        }
-    }
-    
-    // 倒计时结束，不隐藏倒计时屏幕，直接进入深度休眠
-    // 这样屏幕会保持倒计时状态，避免露出底层UI
-    
-    // 关闭屏幕背光 - 使用专门的关闭函数避免触发NVS保存
-    printf("DEEP SLEEP: Turning off display...\n");
-    shutdownDisplay();
-    
-    // 延迟确保屏幕关闭和所有清理操作完成
-    vTaskDelay(pdMS_TO_TICKS(200));
-    
-    printf("DEEP SLEEP: Using RESET button wake-up strategy\n");
-    printf("DEEP SLEEP: No automatic wake-up timer - stable deep sleep mode\n");
-    printf("DEEP SLEEP: To wake up: Press RESET button to restart the device\n");
-    printf("DEEP SLEEP: This avoids GPIO0 conflicts and ensures maximum power saving\n");
-    
-    // 进入深度休眠 - 不配置任何唤醒源，确保最稳定的深度睡眠
-    printf("DEEP SLEEP: Entering deep sleep mode...\n");
-    
-    // 确保所有输出都被刷新
-    fflush(stdout);
-    vTaskDelay(pdMS_TO_TICKS(100));
-    
-    esp_deep_sleep_start();
-}
 
 // 电池保护关机前的回调函数
 static void battery_protection_shutdown_callback(void) {
@@ -773,106 +691,43 @@ static void touch_monitor_task(void *arg) {
                 }
             }
             
-            // 检查是否在右上角深度休眠区域
-            if (is_touch_in_sleep_area(screen_x, screen_y) && !settings_open_preview) {
-                // 深度休眠区域的长按检测逻辑保持不变
-                if (!long_press_active) {
-                    // 开始长按检测
-                    long_press_active = true;
-                    long_press_start_time = current_time;
-                    long_press_start_x = screen_x;
-                    long_press_start_y = screen_y;
-                    printf("LONG PRESS: Started at (%d,%d), need %dms\n", 
-                           screen_x, screen_y, LONG_PRESS_DURATION_MS);
-                } else {
-                    // 检查是否仍在同一区域（允许小范围移动）
-                    uint16_t dx = (screen_x > long_press_start_x) ? 
-                                  (screen_x - long_press_start_x) : (long_press_start_x - screen_x);
-                    uint16_t dy = (screen_y > long_press_start_y) ? 
-                                  (screen_y - long_press_start_y) : (long_press_start_y - screen_y);
-                    
-                    if (dx <= 20 && dy <= 20) { // 允许20像素范围内的移动
-                        uint32_t elapsed = current_time - long_press_start_time;
-                        if (elapsed >= LONG_PRESS_DURATION_MS) {
-                            printf("LONG PRESS: %dms completed! Entering deep sleep...\n",
-                                   LONG_PRESS_DURATION_MS);
-                            deep_sleep_handler();
-                            // 不会执行到这里，因为设备已经进入深度休眠
-                        } else {
-                            // 显示进度（每500ms打印一次）
-                            if (elapsed % 500 == 0) {
-                                printf("LONG PRESS: Progress %dms / %dms\n", 
-                                       (int)elapsed, LONG_PRESS_DURATION_MS);
-                            }
-                        }
-                    } else {
-                        // 移动超出范围，取消长按
-                        printf("LONG PRESS: Cancelled due to movement (dx=%d, dy=%d)\n", dx, dy);
-                        long_press_active = false;
-                    }
-                }
-                
-                // 在深度休眠区域时取消滑动检测
-                if (swipe_active) {
-                    printf("SWIPE: Cancelled - in sleep area\n");
-                    if (ui_state_get_current() == UI_STATE_SETTINGS && !settings_close_pending) {
-                        settings_sheet_apply_offset(0);
-                    }
-                    swipe_active = false;
-                }
+            // 滑动检测
+            if (!swipe_active) {
+                swipe_active = true;
+                swipe_start_x = screen_x;
+                swipe_start_y = screen_y;
+                swipe_last_x = screen_x;
+                swipe_last_y = screen_y;
+                swipe_start_time = current_time;
             } else {
-                // 不在深度休眠区域，取消长按并处理滑动检测
-                if (long_press_active) {
-                    printf("LONG PRESS: Cancelled - moved outside sleep area\n");
-                    long_press_active = false;
+                swipe_last_x = screen_x;
+                swipe_last_y = screen_y;
+
+                int delta_x = (int)screen_x - (int)swipe_start_x;
+                int delta_y = (int)screen_y - (int)swipe_start_y;
+                int abs_dx = delta_x >= 0 ? delta_x : -delta_x;
+                int abs_dy = delta_y >= 0 ? delta_y : -delta_y;
+                ui_state_t ui_now = ui_state_get_current();
+
+                // 关闭：Settings 内从底部起滑，向上跟手（弹药页打开时禁用）
+                if (ui_now == UI_STATE_SETTINGS && bottom_touch_hint_active &&
+                    !settings_close_pending && !settings_ammo_page_is_open() &&
+                    delta_y < 0) {
+                    settings_sheet_apply_offset(delta_y);
                 }
-                
-                // 滑动检测逻辑
-                if (!swipe_active) {
-                    // 开始滑动检测
-                    swipe_active = true;
-                    swipe_start_x = screen_x;
-                    swipe_start_y = screen_y;
-                    swipe_last_x = screen_x;  // 初始化最后位置
-                    swipe_last_y = screen_y;
-                    swipe_start_time = current_time;
-                } else {
-                    // 继续跟踪滑动，更新最后位置
-                    swipe_last_x = screen_x;
-                    swipe_last_y = screen_y;
 
-                    int delta_x = (int)screen_x - (int)swipe_start_x;
-                    int delta_y = (int)screen_y - (int)swipe_start_y;
-                    int abs_dx = delta_x >= 0 ? delta_x : -delta_x;
-                    int abs_dy = delta_y >= 0 ? delta_y : -delta_y;
-                    ui_state_t ui_now = ui_state_get_current();
-
-                    // 关闭：Settings 内从底部起滑，向上跟手（弹药页打开时禁用）
-                    if (ui_now == UI_STATE_SETTINGS && bottom_touch_hint_active &&
-                        !settings_close_pending && !settings_ammo_page_is_open() &&
-                        delta_y < 0) {
-                        settings_sheet_apply_offset(delta_y);
-                    }
-
-                    // 打开：主界面下滑时创建 Settings 预览并跟手落下
-                    // 起点在底部按键区时忽略，避免轻触 Measure 时被当成下滑
-                    if (ui_now != UI_STATE_SETTINGS && !settings_close_pending &&
-                        swipe_start_y < (EXAMPLE_LCD_V_RES - SWIPE_OPEN_EXCLUDE_BOTTOM_PX) &&
-                        abs_dy > abs_dx && delta_y >= SWIPE_FOLLOW_START_PX &&
-                        abs_dx <= SWIPE_MAX_Y_DEVIATION) {
-                        if (settings_sheet_ensure_preview()) {
-                            settings_sheet_apply_offset(-EXAMPLE_LCD_V_RES + delta_y);
-                        }
+                // 打开：主界面下滑时创建 Settings 预览并跟手落下
+                // 起点在底部按键区时忽略，避免轻触 Measure 时被当成下滑
+                if (ui_now != UI_STATE_SETTINGS && !settings_close_pending &&
+                    swipe_start_y < (EXAMPLE_LCD_V_RES - SWIPE_OPEN_EXCLUDE_BOTTOM_PX) &&
+                    abs_dy > abs_dx && delta_y >= SWIPE_FOLLOW_START_PX &&
+                    abs_dx <= SWIPE_MAX_Y_DEVIATION) {
+                    if (settings_sheet_ensure_preview()) {
+                        settings_sheet_apply_offset(-EXAMPLE_LCD_V_RES + delta_y);
                     }
                 }
             }
         } else {
-            // 没有触摸，检查是否需要结束滑动或长按
-            if (long_press_active) {
-                printf("LONG PRESS: Cancelled - touch released\n");
-                long_press_active = false;
-            }
-            
             if (swipe_active) {
                 // 滑动结束，使用最后记录的位置检测滑动方向
                 uint32_t swipe_duration = current_time - swipe_start_time;
@@ -1425,87 +1280,4 @@ void esp_ble_scan_w(void *arg)
     }
     xEventGroupSetBits( TaskEven,(0x01<<1) );
   }
-}
-
-// ===== 倒计时UI实现 (方案4：临时替换显示内容) =====
-
-// 显示倒计时屏幕
-static void countdown_screen_show(void) {
-    if (countdown_screen != NULL) {
-        printf("countdown_screen_show: screen already exists\n");
-        return;
-    }
-    
-    printf("countdown_screen_show: creating countdown screen\n");
-    
-    // 创建全屏遮罩层
-    countdown_screen = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(countdown_screen, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES);
-    lv_obj_align(countdown_screen, LV_ALIGN_CENTER, 0, 0);
-    
-    // 设置样式 - 半透明黑色背景
-    lv_obj_set_style_bg_opa(countdown_screen, 200, LV_PART_MAIN);  // 78% 不透明度
-    lv_obj_set_style_bg_color(countdown_screen, lv_color_black(), LV_PART_MAIN);
-    lv_obj_set_style_border_width(countdown_screen, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(countdown_screen, 0, LV_PART_MAIN);
-    
-    // 创建倒计时数字标签 (大号字体)
-    countdown_label = lv_label_create(countdown_screen);
-    lv_label_set_text(countdown_label, "3");
-    lv_obj_set_style_text_color(countdown_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(countdown_label, &lv_font_montserrat_48, 0);  // 大号字体
-    lv_obj_align(countdown_label, LV_ALIGN_CENTER, 0, -40);  // 稍微上移
-    
-    // 创建提示文字标签
-    countdown_hint_label = lv_label_create(countdown_screen);
-    lv_label_set_text(countdown_hint_label, "Entering sleep mode...\nRelease to cancel");
-    lv_obj_set_style_text_color(countdown_hint_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(countdown_hint_label, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_align(countdown_hint_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(countdown_hint_label, LV_ALIGN_CENTER, 0, 60);  // 稍微下移
-    
-    printf("countdown_screen_show: countdown screen created successfully\n");
-}
-
-// 隐藏倒计时屏幕
-static void countdown_screen_hide(void) {
-    if (countdown_screen != NULL) {
-        printf("countdown_screen_hide: removing countdown screen\n");
-        
-        // 获取LVGL锁保护清理过程
-        if (example_lvgl_lock(1000)) {
-            // 验证对象有效性
-            if (lv_obj_is_valid(countdown_screen)) {
-                lv_obj_del(countdown_screen);
-            }
-            countdown_screen = NULL;
-            countdown_label = NULL;
-            countdown_hint_label = NULL;
-            
-            // 强制刷新显示确保清理完成
-            lv_refr_now(NULL);
-            example_lvgl_unlock();
-            
-            printf("countdown_screen_hide: cleanup completed\n");
-        } else {
-            printf("countdown_screen_hide: failed to acquire LVGL lock\n");
-            // 即使获取锁失败，也要清除指针避免野指针
-            countdown_screen = NULL;
-            countdown_label = NULL;
-            countdown_hint_label = NULL;
-        }
-        
-        // 给系统时间完成清理
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-}
-
-// 更新倒计时显示
-static void countdown_update_display(int seconds) {
-    if (countdown_label != NULL) {
-        char countdown_text[8];
-        snprintf(countdown_text, sizeof(countdown_text), "%d", seconds);
-        lv_label_set_text(countdown_label, countdown_text);
-        printf("countdown_update_display: updated to %d seconds\n", seconds);
-    }
 }
