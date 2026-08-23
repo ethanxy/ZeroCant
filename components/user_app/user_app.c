@@ -612,7 +612,7 @@ static void angle_update_task(void *arg) {
 #endif
             } else if (current_ui_state == UI_STATE_ACTION && current_display_mode == DISPLAY_MODE_ACTION) {
                 if (example_lvgl_lock(40)) {
-                    action_display_update(pitch, roll);
+                    action_display_update(pitch, yaw);
                     example_lvgl_unlock();
                 }
             } else if (current_ui_state == UI_STATE_LASER && current_display_mode == DISPLAY_MODE_LASER) {

@@ -1,4 +1,5 @@
 #include "action_display.h"
+#include "angle_calc.h"
 #include "lvgl.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -34,7 +35,7 @@ static lv_obj_t *trail_minus_btn = NULL;
 static lv_obj_t *trail_plus_btn = NULL;
 static lv_obj_t *trail_len_label = NULL;
 static lv_obj_t *pitch_label = NULL;
-static lv_obj_t *roll_label = NULL;
+static lv_obj_t *yaw_label = NULL;
 static int disp_width = 240;
 static int disp_height = 240;
 static int target_cx = 120;
@@ -47,7 +48,7 @@ static bool target_cached = false;
 
 typedef struct {
     float pitch;
-    float roll;
+    float yaw;
 } trail_sample_t;
 
 static trail_sample_t trail[TRAIL_CAP];
@@ -61,11 +62,13 @@ static uint16_t trail_limit = TRAIL_DEFAULT;
 static int last_px = -1;
 static int last_py = -1;
 static float s_live_pitch = 0.0f;
-static float s_live_roll = 0.0f;
+static float s_live_yaw = 0.0f;
 static float pitch_origin = 0.0f;
+static float yaw_origin = 0.0f;
 static bool pitch_origin_set = false;
+static bool yaw_origin_set = false;
 static float s_last_label_pitch = 9999.0f;
-static float s_last_label_roll = 9999.0f;
+static float s_last_label_yaw = 9999.0f;
 static bool first_update = true;
 static bool trail_dirty = true;
 
@@ -214,14 +217,26 @@ static void draw_target_background(lv_color_t *buf)
     draw_filled_circle(buf, target_cx, target_cy, 6, bull);
 }
 
-static void angles_to_point(float pitch, float roll, int *px, int *py)
+static float wrap_deg180(float a)
+{
+    while (a > 180.0f) {
+        a -= 360.0f;
+    }
+    while (a < -180.0f) {
+        a += 360.0f;
+    }
+    return a;
+}
+
+static void angles_to_point(float pitch, float yaw, int *px, int *py)
 {
     float span = max_angle_deg;
     if (span < ANGLE_RANGE_MIN) {
         span = ANGLE_RANGE_MIN;
     }
     float rel_pitch = pitch - pitch_origin;
-    float nx = roll / span;                 /* roll stays on Set Level */
+    float rel_yaw = wrap_deg180(yaw - yaw_origin);
+    float nx = rel_yaw / span;              /* +yaw = diamond right */
     float ny = rel_pitch / span;            /* +pitch = diamond down */
     float mag2 = nx * nx + ny * ny;
     if (mag2 > 1.0f) {
@@ -269,9 +284,9 @@ static trail_sample_t trail_at(uint16_t chronological_index)
     return trail[(start + chronological_index) % TRAIL_CAP];
 }
 
-static void trail_push(float pitch, float roll)
+static void trail_push(float pitch, float yaw)
 {
-    trail_sample_t sample = { .pitch = pitch, .roll = roll };
+    trail_sample_t sample = { .pitch = pitch, .yaw = yaw };
     if (trail_wrapped || trail_len >= TRAIL_CAP) {
         trail[trail_head] = sample;
         trail_head = (uint16_t)((trail_head + 1) % TRAIL_CAP);
@@ -328,7 +343,7 @@ static void draw_trail_and_marker(int px, int py)
             trail_sample_t s = trail_at((uint16_t)(skip + i));
             int x;
             int y;
-            angles_to_point(s.pitch, s.roll, &x, &y);
+            angles_to_point(s.pitch, s.yaw, &x, &y);
             if (i > 0) {
                 int thickness = (i > count - 8) ? 3 : 2;
                 draw_manual_line(cbuf, prev_x, prev_y, x, y, trail_color(i, count), thickness);
@@ -375,7 +390,7 @@ static void action_redraw_scene(void)
     }
     int px;
     int py;
-    angles_to_point(s_live_pitch, s_live_roll, &px, &py);
+    angles_to_point(s_live_pitch, s_live_yaw, &px, &py);
     last_px = px;
     last_py = py;
     restore_target_background();
@@ -547,19 +562,23 @@ static void action_display_redraw_marker(int px, int py)
     lv_obj_invalidate(action_canvas);
 }
 
-static void action_apply_clear_or_zero(bool set_pitch_origin)
+static void action_apply_clear_or_zero(bool set_aim_origin)
 {
-    if (set_pitch_origin) {
+    if (set_aim_origin) {
+        angle_calc_capture_yaw_bias();
         pitch_origin = s_live_pitch;
+        yaw_origin = s_live_yaw;
         pitch_origin_set = true;
+        yaw_origin_set = true;
         action_zero_btn_refresh_style();
-        s_last_label_pitch = 9999.0f; /* force P: x.x* refresh */
+        s_last_label_pitch = 9999.0f;
+        s_last_label_yaw = 9999.0f;
     }
 
     action_display_clear_trail_internal();
     int px;
     int py;
-    angles_to_point(s_live_pitch, s_live_roll, &px, &py);
+    angles_to_point(s_live_pitch, s_live_yaw, &px, &py);
     last_px = px;
     last_py = py;
     action_display_redraw_marker(px, py);
@@ -583,7 +602,7 @@ static void action_zero_btn_event_cb(lv_event_t *e)
 
 static void action_display_labels_create(lv_obj_t *parent)
 {
-    zero_btn = action_make_btn(parent, "SET P ZERO", action_zero_btn_event_cb,
+    zero_btn = action_make_btn(parent, "SET ZERO", action_zero_btn_event_cb,
                                LV_ALIGN_BOTTOM_LEFT, 12);
     clear_btn = action_make_btn(parent, "CLEAR", action_clear_btn_event_cb,
                                 LV_ALIGN_BOTTOM_RIGHT, -12);
@@ -616,12 +635,12 @@ static void action_display_labels_create(lv_obj_t *parent)
     lv_obj_align(pitch_label, LV_ALIGN_BOTTOM_LEFT, 12, -148);
     lv_obj_clear_flag(pitch_label, LV_OBJ_FLAG_CLICKABLE);
 
-    roll_label = lv_label_create(parent);
-    lv_label_set_text(roll_label, "R: 0.0");
-    lv_obj_set_style_text_color(roll_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(roll_label, &lv_font_montserrat_16, 0);
-    lv_obj_align(roll_label, LV_ALIGN_BOTTOM_RIGHT, -12, -148);
-    lv_obj_clear_flag(roll_label, LV_OBJ_FLAG_CLICKABLE);
+    yaw_label = lv_label_create(parent);
+    lv_label_set_text(yaw_label, "Y: 0.0");
+    lv_obj_set_style_text_color(yaw_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(yaw_label, &lv_font_montserrat_16, 0);
+    lv_obj_align(yaw_label, LV_ALIGN_BOTTOM_RIGHT, -12, -148);
+    lv_obj_clear_flag(yaw_label, LV_OBJ_FLAG_CLICKABLE);
 }
 
 void action_display_init(lv_obj_t *parent, int screen_width, int screen_height)
@@ -669,9 +688,9 @@ void action_display_init(lv_obj_t *parent, int screen_width, int screen_height)
         lv_obj_del(pitch_label);
         pitch_label = NULL;
     }
-    if (roll_label) {
-        lv_obj_del(roll_label);
-        roll_label = NULL;
+    if (yaw_label) {
+        lv_obj_del(yaw_label);
+        yaw_label = NULL;
     }
     if (cbuf) {
         heap_caps_free(cbuf);
@@ -684,11 +703,13 @@ void action_display_init(lv_obj_t *parent, int screen_width, int screen_height)
     target_cached = false;
     action_display_clear_trail_internal();
     pitch_origin = 0.0f;
+    yaw_origin = 0.0f;
     pitch_origin_set = false;
+    yaw_origin_set = false;
     s_live_pitch = 0.0f;
-    s_live_roll = 0.0f;
+    s_live_yaw = 0.0f;
     s_last_label_pitch = 9999.0f;
-    s_last_label_roll = 9999.0f;
+    s_last_label_yaw = 9999.0f;
 
     target_cx = disp_width / 2;
     target_cy = (disp_height - BOTTOM_LABEL_HEIGHT) / 2;
@@ -769,14 +790,14 @@ void action_display_init(lv_obj_t *parent, int screen_width, int screen_height)
     if (pitch_label) {
         lv_obj_move_foreground(pitch_label);
     }
-    if (roll_label) {
-        lv_obj_move_foreground(roll_label);
+    if (yaw_label) {
+        lv_obj_move_foreground(yaw_label);
     }
 
     ESP_LOGI(TAG, "init complete, target %d,%d r=%d", target_cx, target_cy, target_radius);
 }
 
-void action_display_update(float pitch, float roll)
+void action_display_update(float pitch, float yaw)
 {
     if (!action_canvas || !cbuf) {
         return;
@@ -790,15 +811,20 @@ void action_display_update(float pitch, float roll)
     }
 
     s_live_pitch = pitch;
-    s_live_roll = roll;
+    s_live_yaw = yaw;
+    if (!yaw_origin_set) {
+        angle_calc_capture_yaw_bias();
+        yaw_origin = yaw;
+        yaw_origin_set = true;
+    }
 
     int px;
     int py;
-    angles_to_point(pitch, roll, &px, &py);
+    angles_to_point(pitch, yaw, &px, &py);
 
     bool moved = first_update || px != last_px || py != last_py;
     if (moved) {
-        trail_push(pitch, roll);
+        trail_push(pitch, yaw);
         last_px = px;
         last_py = py;
         first_update = false;
@@ -811,11 +837,12 @@ void action_display_update(float pitch, float roll)
         trail_dirty = false;
     }
 
-    if (pitch_label && roll_label &&
+    float rel_yaw = wrap_deg180(yaw - yaw_origin);
+    if (pitch_label && yaw_label &&
         (fabsf(pitch - s_last_label_pitch) >= 0.05f ||
-         fabsf(roll - s_last_label_roll) >= 0.05f)) {
+         fabsf(rel_yaw - s_last_label_yaw) >= 0.05f)) {
         s_last_label_pitch = pitch;
-        s_last_label_roll = roll;
+        s_last_label_yaw = rel_yaw;
         char buf[24];
         if (pitch_origin_set) {
             snprintf(buf, sizeof(buf), "P: %.1f*", pitch);
@@ -823,8 +850,12 @@ void action_display_update(float pitch, float roll)
             snprintf(buf, sizeof(buf), "P: %.1f", pitch);
         }
         lv_label_set_text(pitch_label, buf);
-        snprintf(buf, sizeof(buf), "R: %.1f", roll);
-        lv_label_set_text(roll_label, buf);
+        if (pitch_origin_set) {
+            snprintf(buf, sizeof(buf), "Y: %.1f*", rel_yaw);
+        } else {
+            snprintf(buf, sizeof(buf), "Y: %.1f", rel_yaw);
+        }
+        lv_label_set_text(yaw_label, buf);
     }
 }
 
@@ -887,10 +918,10 @@ void action_display_cleanup(void)
     }
     pitch_label = NULL;
 
-    if (roll_label && lv_obj_is_valid(roll_label)) {
-        lv_obj_del(roll_label);
+    if (yaw_label && lv_obj_is_valid(yaw_label)) {
+        lv_obj_del(yaw_label);
     }
-    roll_label = NULL;
+    yaw_label = NULL;
 
     if (cbuf) {
         heap_caps_free(cbuf);
@@ -904,7 +935,9 @@ void action_display_cleanup(void)
     target_cached = false;
     action_display_clear_trail_internal();
     pitch_origin = 0.0f;
+    yaw_origin = 0.0f;
     pitch_origin_set = false;
+    yaw_origin_set = false;
     s_last_label_pitch = 9999.0f;
-    s_last_label_roll = 9999.0f;
+    s_last_label_yaw = 9999.0f;
 }

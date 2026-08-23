@@ -7,9 +7,12 @@ extern "C" {
 
 void angle_calc_init(float sample_period, float beta);
 void angle_calc_update(void); // 自动读取qmi8658c，更新姿态
+/** pitch/roll: accel vs Set Level. yaw: gyro-integrated heading around gravity (relative, drifts). */
 void angle_calc_get(float *pitch, float *roll, float *yaw);
 /** Last gyro sample from angle_calc_update (dps, after axis transform). */
 void angle_calc_get_gyro(float *gx, float *gy, float *gz);
+/** Snapshot current heading rate as gyro bias (call on SET ZERO / screen entry). */
+void angle_calc_capture_yaw_bias(void);
 // 设置pitch低通滤波系数（0.01~1.0，越大响应越快，默认0.25）
 void angle_calc_set_pitch_lpf_alpha(float alpha);
 // 设置roll低通滤波系数（0.01~1.0，越大响应越快，默认0.3）

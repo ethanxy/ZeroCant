@@ -4,6 +4,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <math.h>
 
 // NVS相关常量
@@ -26,13 +27,42 @@ void angle_calc_init(float sample_period, float beta) {
     angle_calc_load_calibration();
 }
 
-static float last_pitch = 0, last_roll = 0;
+static float last_pitch = 0, last_roll = 0, last_yaw = 0;
 static float last_gyro[3] = {0};
 // 低通滤波参数（可调，0.0~1.0，越大响应越快，建议0.2~0.5）
 static float pitch_lpf_alpha = 0.25f;
 static float roll_lpf_alpha = 0.3f;   // roll滤波系数，可以设置得稍微快一些
 static float filtered_pitch = 0;
 static float filtered_roll = 0;
+
+/* Relative heading: gyro projected onto gravity. No magnetometer, so this drifts.
+ * Sign: +yaw = muzzle right (diamond right on the action target). Flip REL_YAW_SIGN if reversed. */
+#define REL_YAW_SIGN            (-1.0f)
+#define YAW_STILL_DPS           0.6f
+#define YAW_STILL_CONFIRM       8       /* ~200 ms at 40 Hz before freeze */
+#define YAW_BIAS_ALPHA          0.08f   /* ~0.3 s lock when still */
+#define YAW_RATE_FILT_ALPHA     0.2f
+#define YAW_RATE_DEADBAND       0.12f   /* dps; ignore residual noise when moving */
+#define YAW_ACC_NORM_MIN        50.0f   /* mg; ignore free-fall / bad samples */
+#define YAW_DT_MIN              0.001f
+#define YAW_DT_MAX              0.200f
+
+static float yaw_rate_bias = 0.0f;
+static float last_yaw_rate_filt = 0.0f;
+static int64_t last_yaw_us = 0;
+static int yaw_bias_inited = 0;
+static int yaw_still_count = 0;
+
+static float wrap_deg180(float a)
+{
+    while (a > 180.0f) {
+        a -= 360.0f;
+    }
+    while (a < -180.0f) {
+        a += 360.0f;
+    }
+    return a;
+}
 
 // 校准偏移值
 static float pitch_offset = 0.0f;
@@ -70,6 +100,12 @@ void angle_calc_get_gyro(float *gx, float *gy, float *gz) {
     if (gz) *gz = last_gyro[2];
 }
 
+void angle_calc_capture_yaw_bias(void) {
+    yaw_rate_bias = last_yaw_rate_filt;
+    yaw_bias_inited = 1;
+    yaw_still_count = 0;
+}
+
 void angle_calc_update(void) {
     float acc[3], gyro[3];
     qmi8658_read_xyz(acc, gyro);
@@ -100,12 +136,57 @@ void angle_calc_update(void) {
     // 应用校准偏移
     last_pitch = filtered_pitch - pitch_offset;
     last_roll = filtered_roll - roll_offset;
+
+    /* Heading rate = body gyro dotted with the up vector (accelerometer). */
+    float anorm = sqrtf(ax * ax + ay * ay + az * az);
+    int64_t now_us = esp_timer_get_time();
+    float dt_s = dt;
+    if (last_yaw_us != 0) {
+        dt_s = (float)(now_us - last_yaw_us) * 1e-6f;
+        if (dt_s < YAW_DT_MIN) {
+            dt_s = YAW_DT_MIN;
+        } else if (dt_s > YAW_DT_MAX) {
+            dt_s = YAW_DT_MAX;
+        }
+    }
+    last_yaw_us = now_us;
+
+    if (anorm >= YAW_ACC_NORM_MIN) {
+        float yaw_rate = REL_YAW_SIGN * (gyro[0] * ax + gyro[1] * ay + gyro[2] * az) / anorm;
+        last_yaw_rate_filt = YAW_RATE_FILT_ALPHA * yaw_rate
+                           + (1.0f - YAW_RATE_FILT_ALPHA) * last_yaw_rate_filt;
+
+        float gyro_l1 = fabsf(gyro[0]) + fabsf(gyro[1]) + fabsf(gyro[2]);
+        if (gyro_l1 < YAW_STILL_DPS) {
+            if (yaw_still_count < YAW_STILL_CONFIRM) {
+                yaw_still_count++;
+            }
+            if (!yaw_bias_inited) {
+                yaw_rate_bias = yaw_rate;
+                last_yaw_rate_filt = yaw_rate;
+                yaw_bias_inited = 1;
+            } else {
+                yaw_rate_bias = YAW_BIAS_ALPHA * yaw_rate + (1.0f - YAW_BIAS_ALPHA) * yaw_rate_bias;
+            }
+            /* Resting: learn bias, do not integrate leftover offset. */
+            if (yaw_still_count >= YAW_STILL_CONFIRM) {
+                return;
+            }
+        } else {
+            yaw_still_count = 0;
+        }
+
+        float residual = yaw_rate - yaw_rate_bias;
+        if (fabsf(residual) > YAW_RATE_DEADBAND) {
+            last_yaw = wrap_deg180(last_yaw + residual * dt_s);
+        }
+    }
 }
 
 void angle_calc_get(float *pitch, float *roll, float *yaw) {
     if (pitch) *pitch = last_pitch;
     if (roll) *roll = last_roll;
-    if (yaw) *yaw = 0.0f; // 静态加速度计无法得出yaw
+    if (yaw) *yaw = last_yaw;
 }
 
 // 水平校准功能：将当前角度设为水平基准
