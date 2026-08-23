@@ -222,7 +222,7 @@ static void angles_to_point(float pitch, float roll, int *px, int *py)
     }
     float rel_pitch = pitch - pitch_origin;
     float nx = roll / span;                 /* roll stays on Set Level */
-    float ny = -rel_pitch / span;           /* pitch relative to SET ZERO */
+    float ny = rel_pitch / span;            /* +pitch = diamond down */
     float mag2 = nx * nx + ny * ny;
     if (mag2 > 1.0f) {
         float mag = sqrtf(mag2);
