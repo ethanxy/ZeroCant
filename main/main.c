@@ -33,6 +33,7 @@
 #include "angle_display.h" // 角度显示组件
 #include "level_display.h" // 水平仪显示组件
 #include "action_display.h" // 动作监控组件
+#include "action_store.h"
 #include "laser.h" // 激光组件
 #include "settings.h" // 设置组件
 
@@ -489,6 +490,13 @@ void app_main(void)
     } else {
         ESP_LOGE(TAG, "Failed to initialize NVS (%s), using default brightness", esp_err_to_name(nvs_ret));
         current_brightness = 179; // 使用默认70%亮度
+    }
+
+    ESP_LOGI(TAG, "Mounting action recording storage...");
+    esp_err_t store_ret = action_store_init();
+    if (store_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Action store init failed: %s (recordings disabled)",
+                 esp_err_to_name(store_ret));
     }
     
     // 初始化UI状态管理器

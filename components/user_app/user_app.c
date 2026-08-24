@@ -675,10 +675,17 @@ static void touch_monitor_task(void *arg) {
             idle_sleep_on_activity();
             // 转换触摸坐标到屏幕坐标系
             transform_touch_coordinates(raw_x, raw_y, &screen_x, &screen_y);
+
+            bool action_overlay_open = (ui_state_get_current() == UI_STATE_ACTION &&
+                                        action_display_is_overlay_open());
+            if (action_overlay_open) {
+                swipe_active = false;
+            }
             
             // 检查是否在设置界面的底部区域（关闭手势起点）
             // 弹药子页打开时禁用，避免抢占 Back/Save 等底部按钮
-            if (ui_state_get_current() == UI_STATE_SETTINGS && !settings_close_pending &&
+            if (!action_overlay_open &&
+                ui_state_get_current() == UI_STATE_SETTINGS && !settings_close_pending &&
                 !settings_ammo_page_is_open()) {
                 if (screen_y >= EXAMPLE_LCD_V_RES - SWIPE_BOTTOM_ZONE_PX) {
                     if (!bottom_touch_hint_active) {
@@ -692,6 +699,7 @@ static void touch_monitor_task(void *arg) {
             }
             
             // 滑动检测
+            if (!action_overlay_open) {
             if (!swipe_active) {
                 swipe_active = true;
                 swipe_start_x = screen_x;
@@ -726,6 +734,7 @@ static void touch_monitor_task(void *arg) {
                         settings_sheet_apply_offset(-EXAMPLE_LCD_V_RES + delta_y);
                     }
                 }
+            }
             }
         } else {
             if (swipe_active) {
