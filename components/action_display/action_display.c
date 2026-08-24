@@ -28,6 +28,7 @@ static const char *TAG = "action_display";
 #define DIAMOND_SIZE            10
 #define RING_COUNT              5
 #define BOTTOM_LABEL_HEIGHT     156
+#define PLAY_TIME_Y             8
 
 static lv_obj_t *action_canvas = NULL;
 static lv_obj_t *zero_btn = NULL;
@@ -661,6 +662,26 @@ static void action_rec_refresh_style(void)
     }
 }
 
+static void action_play_refresh_label(uint32_t now_ms, uint32_t tot_ms)
+{
+    if (!play_label || !lv_obj_is_valid(play_label)) {
+        return;
+    }
+    char buf[24];
+    char now_s[8];
+    char tot_s[8];
+    action_format_mmss(now_ms, now_s, sizeof(now_s));
+    action_format_mmss(tot_ms, tot_s, sizeof(tot_s));
+    snprintf(buf, sizeof(buf), "PLAY %s/%s", now_s, tot_s);
+    const char *cur = lv_label_get_text(play_label);
+    if (!cur || strcmp(cur, buf) != 0) {
+        lv_label_set_text(play_label, buf);
+    }
+    lv_obj_align(play_label, LV_ALIGN_TOP_MID, 0, PLAY_TIME_Y);
+    lv_obj_move_foreground(play_label);
+    lv_obj_clear_flag(play_label, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void action_play_restore_origin(void)
 {
     pitch_origin = s_saved_pitch_origin;
@@ -681,6 +702,39 @@ static void action_play_stop(void)
     action_play_restore_origin();
     if (play_label && lv_obj_is_valid(play_label)) {
         lv_obj_add_flag(play_label, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void action_play_stop_from_user(void)
+{
+    if (!s_playing) {
+        return;
+    }
+    action_play_stop();
+    action_display_clear_trail_internal();
+    action_redraw_scene();
+}
+
+static void action_canvas_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+    if (!s_playing) {
+        return;
+    }
+    lv_indev_t *indev = lv_indev_get_act();
+    if (!indev) {
+        return;
+    }
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    lv_area_t coords;
+    lv_obj_get_coords(action_canvas, &coords);
+    int dx = (p.x - coords.x1) - target_cx;
+    int dy = (p.y - coords.y1) - target_cy;
+    if ((dx * dx + dy * dy) <= (target_radius * target_radius)) {
+        action_play_stop_from_user();
     }
 }
 
@@ -771,10 +825,7 @@ static void action_play_start(uint8_t slot)
     s_play_start_us = esp_timer_get_time();
     s_playing = true;
     action_list_close();
-    if (play_label && lv_obj_is_valid(play_label)) {
-        lv_label_set_text(play_label, "PLAY");
-        lv_obj_clear_flag(play_label, LV_OBJ_FLAG_HIDDEN);
-    }
+    action_play_refresh_label(0, info.duration_ms);
 }
 
 static void action_list_item_cb(lv_event_t *e)
@@ -896,12 +947,20 @@ static void action_record_ui_create(lv_obj_t *parent)
     lv_obj_center(list_icon);
 
     play_label = lv_label_create(parent);
-    lv_label_set_text(play_label, "PLAY");
+    lv_label_set_text(play_label, "PLAY 0:00/0:00");
     lv_obj_set_style_text_color(play_label, lv_color_hex(0x66FF66), 0);
     lv_obj_set_style_text_font(play_label, &lv_font_montserrat_16, 0);
-    lv_obj_align(play_label, LV_ALIGN_TOP_MID, 0, 18);
-    lv_obj_add_flag(play_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_align(play_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_bg_color(play_label, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(play_label, LV_OPA_80, 0);
+    lv_obj_set_style_pad_hor(play_label, 10, 0);
+    lv_obj_set_style_pad_ver(play_label, 13, 0);
+    lv_obj_set_style_radius(play_label, 8, 0);
+    lv_obj_add_flag(play_label, LV_OBJ_FLAG_FLOATING);
     lv_obj_clear_flag(play_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(play_label, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(play_label, LV_ALIGN_TOP_MID, 0, PLAY_TIME_Y);
+    lv_obj_add_flag(play_label, LV_OBJ_FLAG_HIDDEN);
 
     list_overlay = lv_obj_create(parent);
     lv_obj_set_size(list_overlay, lv_pct(100), lv_pct(100));
@@ -1126,7 +1185,8 @@ void action_display_init(lv_obj_t *parent, int screen_width, int screen_height)
 
     lv_obj_set_size(action_canvas, disp_width, disp_height);
     lv_obj_align(action_canvas, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_clear_flag(action_canvas, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(action_canvas, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(action_canvas, action_canvas_event_cb, LV_EVENT_CLICKED, NULL);
     lv_canvas_set_buffer(action_canvas, cbuf, disp_width, disp_height, LV_IMG_CF_TRUE_COLOR);
 
     draw_target_background(cbuf);
@@ -1213,17 +1273,9 @@ void action_display_update(float pitch, float yaw)
             pitch = s_rec_buf[s_play_index].pitch;
             yaw = s_rec_buf[s_play_index].yaw;
             s_play_index++;
-            if (play_label && lv_obj_is_valid(play_label)) {
-                char buf[24];
-                char now_s[8];
-                char tot_s[8];
-                uint32_t now_ms = ((uint32_t)s_play_index * 1000u) / ACTION_STORE_SAMPLE_HZ;
-                uint32_t tot_ms = ((uint32_t)s_play_count * 1000u) / ACTION_STORE_SAMPLE_HZ;
-                action_format_mmss(now_ms, now_s, sizeof(now_s));
-                action_format_mmss(tot_ms, tot_s, sizeof(tot_s));
-                snprintf(buf, sizeof(buf), "PLAY %s/%s", now_s, tot_s);
-                lv_label_set_text(play_label, buf);
-            }
+            uint32_t now_ms = ((uint32_t)s_play_index * 1000u) / ACTION_STORE_SAMPLE_HZ;
+            uint32_t tot_ms = ((uint32_t)s_play_count * 1000u) / ACTION_STORE_SAMPLE_HZ;
+            action_play_refresh_label(now_ms, tot_ms);
         }
     }
 
