@@ -37,7 +37,7 @@
 #include "laser.h" // 激光组件
 #include "settings.h" // 设置组件
 
-static const char *TAG = "example";
+static const char *TAG = "zerocant";
 static SemaphoreHandle_t lvgl_mux = NULL;
 
 #define LCD_HOST  SPI2_HOST

@@ -339,7 +339,7 @@ void settings_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
 
     {
         char version_str[48];
-        snprintf(version_str, sizeof(version_str), "FW %s", resolve_firmware_version());
+        snprintf(version_str, sizeof(version_str), "ZeroCant %s", resolve_firmware_version());
         lv_label_set_text(version_label, version_str);
     }
     lv_obj_set_style_text_color(version_label, lv_color_hex(0x808080), 0);
@@ -368,7 +368,7 @@ void settings_ui_init(lv_obj_t *parent, int scr_width, int scr_height) {
     lv_obj_add_flag(swipe_hint_rect, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_clear_flag(swipe_hint_rect, LV_OBJ_FLAG_CLICKABLE);
     
-    printf("settings_ui_init: completed successfully (FW %s)\n", resolve_firmware_version());
+    printf("settings_ui_init: completed successfully (ZeroCant %s)\n", resolve_firmware_version());
 }
 
 void settings_ui_update_voltage(float voltage) {
